@@ -1,0 +1,14 @@
+fastapi==0.129.0
+uvicorn==0.41.0
+websockets==15.0.1
+pyyaml==6.0.3
+sounddevice==0.5.5
+numpy==1.26.4
+soxr==1.0.0
+sherpa-onnx==1.13.4
+sherpa-onnx-bin==1.13.4
+fireredvad==0.0.2
+onnxruntime==1.27.0
+deepfilternet==0.5.6
+huggingface-hub>=0.30,<2
+tqdm>=4.66

@@ -1,0 +1,136 @@
+stt:
+  sherpa_model_id: auto
+  chunk_size_ms: 60
+  process_interval_s: 2.0
+  window_slack_s: 1.0
+  process_batch_ms: 120
+  window_overlap_s: 0.0
+  end_vad_enabled: true
+  end_vad_backend: firered
+  firered_vad_model_path: models/FireRedVAD/Stream-VAD
+  firered_vad_threshold: 0.4
+  firered_vad_min_speech_ms: 80
+  firered_vad_rms_confirmation: true
+  ten_vad_model_path: models/ten-vad.int8.onnx
+  ten_vad_threshold: 0.2
+  ten_vad_min_speech_ms: 100
+  end_vad_silence_ms: 230
+  long_phrase_after_s: 6.0
+  long_phrase_end_vad_silence_ms: 150
+  max_phrase_s: 10.0
+  forced_split_search_s: 3.0
+  end_vad_rms_threshold: 0.01
+  end_vad_frame_ms: 25
+  end_vad_max_active_ratio: 0.15
+  end_vad_recent_ms: 75
+  speech_activity_rms_threshold: 0.018
+  speech_activity_min_ratio: 0.12
+  sherpa_onnx_provider: cpu
+  sherpa_onnx_num_threads: 4
+  sherpa_blank_penalty: null
+  blocked_phrases:
+  - Дима Торжок
+  duplicate_similarity_threshold: 0.9
+  max_consecutive_duplicate_utterances: 1
+  max_consecutive_decode_failures: 3
+  debug_audio_enabled: false
+  debug_audio_max_files: 100
+translation:
+  model_path: models/translate_gemma4_sub-E4B-Q4_K_XL.gguf
+  device: gpu
+  n_gpu_layers: -1
+  mtp_enabled: true
+  mtp_model_path: auto
+  mtp_n: 1
+  llama_server_path: bin/llama.cpp/llama-server.exe
+  n_ctx: 1024
+  n_batch: 256
+  context_subtitles: 3
+  target_language: English
+  prompt_preset: ja_to_en
+  max_tokens: 128
+  repeat_penalty: 1.08
+  duplicate_similarity_threshold: 0.9
+  max_output_length_ratio: 5.0
+  max_output_extra_chars: 80
+  min_output_length_limit: 120
+  max_output_chars: 500
+  context_leak_similarity_threshold: 0.68
+  context_leak_source_similarity_limit: 0.55
+  context_max_age_s: 15.0
+  realtime_queue_max_utterances: 2
+  realtime_max_utterance_age_s: 3.0
+  realtime_max_translation_latency_s: 3.0
+  subtitle_duplicate_similarity_threshold: 0.82
+  subtitle_duplicate_min_chars: 12
+  subtitle_source_repeat_similarity_threshold: 0.78
+  subtitle_cjk_source_repeat_similarity_threshold: 0.9
+audio:
+  capture_mode: browser_tab
+  device_name: CABLE Output
+  fallback_mic_id: null
+  browser_audio_host: 127.0.0.1
+  browser_audio_port: 8766
+  sampling_rate: 16000
+  input_gain: 1.0
+  buffer_max_chunks: 1024
+  drop_oldest_on_overflow: true
+  max_pcm_backlog_s: 6.0
+  dfn2:
+    enabled: true
+    input_sample_rate: 48000
+    block_ms: 40
+    vad_atten_lim_db: 20.0
+    stt_atten_lim_db: 20.0
+    vad_context_s: 3.0
+    post_filter: false
+    device: cpu
+    wet_mix: 1.0
+    model: DeepFilterNet2
+    log_level: ERROR
+  fastenhancer:
+    enabled: true
+    model_path: models/fastenhancer/fastenhancer_b_48khz.onnx
+    input_sample_rate: 48000
+    n_fft: 1024
+    hop_samples: 512
+    num_threads: 4
+    wet_mix: 0.5
+    wet_mix_by_language:
+      ja: 0.45
+    languages:
+    - en
+    - ja
+    - ko
+    - es
+overlay:
+  enabled: true
+  mode: browser
+  topmost: true
+  browser_bridge_enabled: true
+  browser_bridge_host: 127.0.0.1
+  browser_bridge_port: 8765
+  browser_bridge_timeout_s: 2.0
+  browser_targets:
+  - all
+  title_keywords:
+  - twitch
+  - youtube
+  opacity: 0.82
+  width: 860
+  min_width: 420
+  max_width: 1200
+  height: 124
+  min_height: 88
+  max_height: 220
+  bottom_offset: 80
+  font_size: 23
+  source_font_size: 15
+  show_source: true
+  corner_radius: 28
+  background: '#101010'
+  foreground: '#F5F5F5'
+  source_foreground: '#B8B8B8'
+language: ja
+log_level: INFO
+translation_log_max_bytes: 10000000

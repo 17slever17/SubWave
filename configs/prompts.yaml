@@ -1,0 +1,13 @@
+active: ja_to_en
+presets:
+  ja_to_en:
+    name: Japanese to English
+    source_language: ja
+    target_language: English
+    template: 'TASK: Translate Japanese subtitles into English.
+
+      STYLE: friendly.
+
+      Translate only CURRENT_SOURCE. PREVIOUS_SOURCE and PREVIOUS_TRANSLATION are
+      context only. Preserve meaning, tone, slang, profanity, uncertainty, repetitions
+      and incomplete speech. Return only the final translation without labels or commentary.'

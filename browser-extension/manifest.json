@@ -1,0 +1,56 @@
+{
+  "manifest_version": 3,
+  "name": "Realtime Translator",
+  "version": "0.2.6",
+  "description": "Capture tab audio and display local realtime translations.",
+  "minimum_chrome_version": "127",
+  "icons": {
+    "16": "icons/translate-gemma-t-16.png",
+    "32": "icons/translate-gemma-t-32.png",
+    "48": "icons/translate-gemma-t-48.png",
+    "128": "icons/translate-gemma-t-128.png"
+  },
+  "permissions": [
+    "activeTab",
+    "offscreen",
+    "storage",
+    "tabCapture",
+    "tabs"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "https://*.youtube.com/*",
+    "https://youtu.be/*",
+    "https://*.twitch.tv/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "action": {
+    "default_title": "Toggle realtime translation for this tab",
+    "default_popup": "capture-popup.html",
+    "default_icon": {
+      "16": "icons/power-gray-16.png",
+      "32": "icons/power-gray-32.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://youtube.com/*",
+        "https://www.youtube.com/*",
+        "https://m.youtube.com/*",
+        "https://music.youtube.com/*",
+        "https://youtu.be/*",
+        "https://twitch.tv/*",
+        "https://www.twitch.tv/*"
+      ],
+      "js": ["content-script.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src http://127.0.0.1:* ws://127.0.0.1:8766"
+  }
+}
