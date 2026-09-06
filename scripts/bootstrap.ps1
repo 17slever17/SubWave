@@ -5,6 +5,7 @@ $VenvDir = Join-Path $AppDir ".venv"
 $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
 $Requirements = Join-Path $AppDir "requirements.txt"
 $StateFile = Join-Path $VenvDir ".install-state"
+$DeepFilterLibWheel = Join-Path $AppDir "wheels\DeepFilterLib-0.5.6-cp312-none-win_amd64.whl"
 
 function Find-CompatiblePython {
     $candidates = @(
@@ -98,6 +99,13 @@ function Invoke-Checked {
     if ($LASTEXITCODE -ne 0) {
         throw $FailureMessage
     }
+}
+
+function Test-VendoredDeepFilterLibPlatform {
+    param([Parameter(Mandatory = $true)][string]$Python)
+
+    & $Python -c "import platform, struct, sys; raise SystemExit(0 if sys.platform == 'win32' and sys.version_info[:2] == (3, 12) and platform.machine().lower() in ('amd64', 'x86_64') and struct.calcsize('P') == 8 else 1)" *> $null
+    return $LASTEXITCODE -eq 0
 }
 
 function Invoke-Download {
@@ -312,13 +320,24 @@ $requirementsHash = (Get-FileHash -Algorithm SHA256 $Requirements).Hash
 $bootstrapHash = (Get-FileHash -Algorithm SHA256 $MyInvocation.MyCommand.Path).Hash
 $cudaTag = Get-CudaWheelTag
 $runtimeTag = if ($cudaTag) { $cudaTag } else { "cpu" }
-$desiredState = "$requirementsHash`n$bootstrapHash`n$runtimeTag"
+$useVendoredDeepFilterLib = Test-VendoredDeepFilterLibPlatform -Python $VenvPython
+$deepFilterLibWheelHash = "pypi"
+if ($useVendoredDeepFilterLib) {
+    if (-not (Test-Path -LiteralPath $DeepFilterLibWheel)) {
+        throw "The vendored DeepFilterLib wheel is required for Python 3.12 x64: $DeepFilterLibWheel"
+    }
+    $deepFilterLibWheelHash = (Get-FileHash -Algorithm SHA256 $DeepFilterLibWheel).Hash
+}
+$desiredState = "$requirementsHash`n$bootstrapHash`n$runtimeTag`n$deepFilterLibWheelHash"
 $currentState = if (Test-Path $StateFile) { Get-Content -Raw $StateFile } else { "" }
 
 if ($currentState.Trim() -ne $desiredState.Trim()) {
     Write-Host "[setup] Installing required libraries. This can take several minutes on the first run..."
     Invoke-Checked $VenvPython @("-m", "pip", "install", "--upgrade", "pip", "setuptools") "Could not update pip."
     Invoke-Checked $VenvPython @("-m", "pip", "install", "torch==2.10.0", "torchaudio==2.10.0", "--index-url", "https://download.pytorch.org/whl/cpu") "Could not install PyTorch."
+    if ($useVendoredDeepFilterLib) {
+        Invoke-Checked $VenvPython @("-m", "pip", "install", "--no-deps", $DeepFilterLibWheel) "Could not install the vendored DeepFilterLib wheel."
+    }
     Invoke-Checked $VenvPython @("-m", "pip", "install", "--requirement", $Requirements) "Could not install runtime libraries."
 
     if ($cudaTag) {
