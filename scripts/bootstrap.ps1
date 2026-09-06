@@ -46,8 +46,10 @@ function Install-Python {
         "--accept-source-agreements",
         "--disable-interactivity"
     )
-    & $winget.Source @wingetArgs 2>&1 | Out-Host
-    $wingetExitCode = $LASTEXITCODE
+    # Keep winget attached to the console. Redirecting it through PowerShell 5.1
+    # makes winget emit UTF-8 that the OEM code page can decode incorrectly.
+    $wingetProcess = Start-Process -FilePath $winget.Source -ArgumentList $wingetArgs -NoNewWindow -Wait -PassThru
+    $wingetExitCode = $wingetProcess.ExitCode
     if ($wingetExitCode -ne 0) {
         throw "Python installation failed (winget exit code $wingetExitCode). Install Python 3.12 manually and run start.bat again."
     }
