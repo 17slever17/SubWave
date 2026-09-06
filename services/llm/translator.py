@@ -21,7 +21,6 @@ class LLMTranslator:
 
         self.model_path = self._get_val("model_path")
         self.device = str(self._get_val("device", "auto"))
-        self.n_gpu_layers = int(self._get_val("n_gpu_layers", -1))
         self.mtp_enabled = bool(self._get_val("mtp_enabled", True))
         self.mtp_model_path = str(self._get_val("mtp_model_path", "auto"))
         self.mtp_n = max(1, int(self._get_val("mtp_n", 1)))
@@ -68,8 +67,6 @@ class LLMTranslator:
         if resolved_model_path and resolved_model_path.exists():
             self.model_path = str(resolved_model_path)
 
-        resolved_gpu_layers = self._resolve_n_gpu_layers()
-
         self.logger.info("Loading translator model from %s...", self.model_path)
         configured_model_path = str(self._get_val("model_path", self.model_path))
         use_mtp = should_use_translation_mtp(
@@ -78,71 +75,63 @@ class LLMTranslator:
             self.device,
             self.mtp_enabled,
         )
+        draft_path = None
         if use_mtp:
-            draft_path = translation_mtp_path(
+            candidate = translation_mtp_path(
                 configured_model_path,
                 self.mtp_model_path,
             )
-            if draft_path and draft_path.is_file():
-                try:
-                    self.llm = NativeLlamaServer(
-                        server_path=self.llama_server_path,
-                        model_path=self.model_path,
-                        mtp_model_path=str(draft_path),
-                        mtp_n=self.mtp_n,
-                        device=self.device,
-                        n_ctx=self.n_ctx,
-                        n_batch=self.n_batch,
-                        request_timeout_s=self.request_timeout_s,
-                    )
-                    self.logger.info(
-                        "Translator model loaded with native MTP. "
-                        "device=%s mtp_model=%s mtp_n=%s n_ctx=%s n_batch=%s",
-                        self.device,
-                        draft_path,
-                        self.mtp_n,
-                        self.n_ctx,
-                        self.n_batch,
-                    )
-                    return
-                except Exception as exc:
-                    self.logger.warning(
-                        "Native MTP backend unavailable; falling back to "
-                        "llama-cpp-python: %s",
-                        exc,
-                    )
+            if candidate and candidate.is_file():
+                draft_path = candidate
             else:
                 self.logger.warning(
-                    "MTP model is unavailable for %s; using llama-cpp-python.",
+                    "MTP model is unavailable for %s; using native standard inference.",
                     configured_model_path,
                 )
         elif self.mtp_enabled:
             self.logger.info(
-                "MTP is not compatible with model=%s on device=%s; using standard inference.",
+                "MTP is not compatible with model=%s on device=%s; using native standard inference.",
                 configured_model_path,
                 self.device,
             )
-        try:
-            from llama_cpp import Llama
+        else:
+            self.logger.info("MTP is disabled; using native standard inference.")
 
-            self.llm = Llama(
-                model_path=self.model_path,
-                n_gpu_layers=resolved_gpu_layers,
-                n_ctx=self.n_ctx,
-                n_batch=self.n_batch,
-                flash_attn=True,
-                verbose=False,
-                logits_all=False,
+        server_kwargs = {
+            "server_path": self.llama_server_path,
+            "model_path": self.model_path,
+            "device": self.device,
+            "n_ctx": self.n_ctx,
+            "n_batch": self.n_batch,
+            "request_timeout_s": self.request_timeout_s,
+        }
+        if draft_path is not None:
+            server_kwargs.update(
+                mtp_model_path=str(draft_path),
+                mtp_n=self.mtp_n,
             )
-            self.logger.info(
-                "Translator model loaded successfully. device=%s n_gpu_layers=%s n_ctx=%s n_batch=%s",
-                self.device,
-                resolved_gpu_layers,
-                self.n_ctx,
-                self.n_batch,
-            )
+        try:
+            self.llm = NativeLlamaServer(**server_kwargs)
+            if draft_path is not None:
+                self.logger.info(
+                    "Translator model loaded with native MTP. "
+                    "device=%s mtp_model=%s mtp_n=%s n_ctx=%s n_batch=%s",
+                    self.device,
+                    draft_path,
+                    self.mtp_n,
+                    self.n_ctx,
+                    self.n_batch,
+                )
+            else:
+                self.logger.info(
+                    "Translator model loaded with native standard inference. "
+                    "device=%s n_ctx=%s n_batch=%s",
+                    self.device,
+                    self.n_ctx,
+                    self.n_batch,
+                )
         except Exception as exc:
-            self.logger.error("Failed to load translator model: %s", exc)
+            self.logger.error("Failed to load native llama-server translator model: %s", exc)
             self.llm = None
 
     def close(self) -> None:
@@ -159,19 +148,6 @@ class LLMTranslator:
         if isinstance(self.root_config, dict):
             return self.root_config.get(key, default)
         return getattr(self.root_config, key, default)
-
-    def _resolve_n_gpu_layers(self) -> int:
-        device = self.device.strip().lower()
-        if device == "cpu":
-            return 0
-        if device in {"gpu", "cuda"}:
-            if self.n_gpu_layers == 0:
-                self.logger.warning(
-                    "GPU translation was configured with n_gpu_layers=0; using full offload (-1)"
-                )
-                return -1
-            return self.n_gpu_layers if self.n_gpu_layers >= 0 else -1
-        return self.n_gpu_layers if self.n_gpu_layers >= 0 else -1
 
     def _build_system_prompt(self) -> str:
         return self.prompt_store.get_prompt(
@@ -205,7 +181,7 @@ class LLMTranslator:
         context_translation: str = "",
     ) -> str:
         if not self.llm:
-            return text
+            return ""
 
         self._context_reset_requested = False
         try:
@@ -264,7 +240,7 @@ class LLMTranslator:
             return ""
         except Exception as exc:
             self.logger.error("Translation failed: %s", exc)
-            return text
+            return ""
 
     def _stabilize_output(self, source_text: str, result: str, finish_reason: str | None = None) -> str:
         had_token_loop = has_repeated_token_loop(result)

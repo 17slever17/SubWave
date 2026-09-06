@@ -37,39 +37,6 @@ class TestLLMPrompts(unittest.TestCase):
         self.assertIn("[CURRENT_SOURCE]", messages[1]["content"])
         self.assertIn("こんにちは、世界。", messages[1]["content"])
 
-    def test_translation_cpu_mode_disables_gpu_layers(self):
-        config = Config()
-        config.translation = TranslationConfig(
-            model_path="",
-            device="cpu",
-            n_gpu_layers=-1,
-        )
-        translator = LLMTranslator(config)
-        self.assertEqual(translator._resolve_n_gpu_layers(), 0)
-
-    def test_translation_gpu_mode_repairs_stale_zero_layers(self):
-        config = Config()
-        config.translation = TranslationConfig(
-            model_path="",
-            device="gpu",
-            n_gpu_layers=0,
-        )
-        translator = LLMTranslator(config)
-        self.assertEqual(translator._resolve_n_gpu_layers(), -1)
-
-    @patch("llama_cpp.Llama")
-    def test_translate_gemma_can_use_gpu_layers(self, mock_llama):
-        config = Config()
-        config.translation = TranslationConfig(
-            model_path="models/translate_gemma4_sub-E4B-Q4_K_XL.gguf",
-            device="gpu",
-            n_gpu_layers=-1,
-        )
-
-        translator = LLMTranslator(config)
-
-        self.assertEqual(translator._resolve_n_gpu_layers(), -1)
-
     def test_translation_duplicate_is_collapsed_and_requests_context_reset(self):
         config = Config()
         config.translation = TranslationConfig(model_path="")
@@ -109,7 +76,7 @@ class TestLLMPrompts(unittest.TestCase):
         self.assertEqual(result, "")
         self.assertTrue(translator.consume_context_reset_request())
 
-    def test_native_mtp_is_used_when_matching_draft_exists(self):
+    def test_e4b_gpu_uses_native_mtp_backend(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             model = Path(temp_dir) / "translate_gemma4_sub-E4B-Q4_K_XL.gguf"
             draft = Path(temp_dir) / "mtp-gemma-4-E4B-it.gguf"
@@ -118,6 +85,7 @@ class TestLLMPrompts(unittest.TestCase):
             config = Config()
             config.translation = TranslationConfig(
                 model_path=str(model),
+                device="gpu",
                 mtp_enabled=True,
                 mtp_model_path=str(draft),
                 mtp_n=2,
@@ -127,7 +95,6 @@ class TestLLMPrompts(unittest.TestCase):
                 patch(
                     "services.llm.translator.NativeLlamaServer"
                 ) as native,
-                patch("llama_cpp.Llama") as fallback,
             ):
                 translator = LLMTranslator(config)
 
@@ -135,9 +102,28 @@ class TestLLMPrompts(unittest.TestCase):
             native.assert_called_once()
             self.assertEqual(native.call_args.kwargs["mtp_model_path"], str(draft))
             self.assertEqual(native.call_args.kwargs["mtp_n"], 2)
-            fallback.assert_not_called()
 
-    def test_native_mtp_failure_falls_back_to_llama_cpp(self):
+    def test_missing_mtp_draft_uses_native_standard_backend(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model = Path(temp_dir) / "translate_gemma4_sub-E4B-Q4_K_XL.gguf"
+            model.touch()
+            config = Config()
+            config.translation = TranslationConfig(
+                model_path=str(model),
+                device="gpu",
+                mtp_enabled=True,
+                mtp_model_path=str(Path(temp_dir) / "missing-draft.gguf"),
+            )
+
+            with patch("services.llm.translator.NativeLlamaServer") as native:
+                translator = LLMTranslator(config)
+
+            native.assert_called_once()
+            self.assertNotIn("mtp_model_path", native.call_args.kwargs)
+            self.assertNotIn("mtp_n", native.call_args.kwargs)
+            self.assertIs(translator.llm, native.return_value)
+
+    def test_native_mtp_failure_does_not_fall_back(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             model = Path(temp_dir) / "translate_gemma4_sub-E4B-Q4_K_XL.gguf"
             draft = Path(temp_dir) / "mtp-gemma-4-E4B-it.gguf"
@@ -150,20 +136,17 @@ class TestLLMPrompts(unittest.TestCase):
                 mtp_model_path=str(draft),
             )
 
-            with (
-                patch(
-                    "services.llm.translator.NativeLlamaServer",
-                    side_effect=RuntimeError("unsupported draft"),
-                ) as native,
-                patch("llama_cpp.Llama") as fallback,
-            ):
+            with patch(
+                "services.llm.translator.NativeLlamaServer",
+                side_effect=RuntimeError("unsupported draft"),
+            ) as native:
                 translator = LLMTranslator(config)
 
             native.assert_called_once()
-            fallback.assert_called_once()
-            self.assertIs(translator.llm, fallback.return_value)
+            self.assertIsNone(translator.llm)
+            self.assertEqual(translator.translate("Hello!"), "")
 
-    def test_e2b_gpu_does_not_start_native_mtp_backend(self):
+    def test_e2b_gpu_uses_native_standard_backend(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             model = Path(temp_dir) / "translate_gemma4_sub-E2B-Q4_K_XL.gguf"
             draft = Path(temp_dir) / "mtp-gemma-4-E2B-it.gguf"
@@ -177,15 +160,36 @@ class TestLLMPrompts(unittest.TestCase):
                 mtp_model_path=str(draft),
             )
 
-            with (
-                patch("services.llm.translator.NativeLlamaServer") as native,
-                patch("llama_cpp.Llama") as fallback,
-            ):
+            with patch("services.llm.translator.NativeLlamaServer") as native:
                 translator = LLMTranslator(config)
 
-            native.assert_not_called()
-            fallback.assert_called_once()
-            self.assertIs(translator.llm, fallback.return_value)
+            native.assert_called_once()
+            self.assertNotIn("mtp_model_path", native.call_args.kwargs)
+            self.assertNotIn("mtp_n", native.call_args.kwargs)
+            self.assertIs(translator.llm, native.return_value)
+
+    def test_e2b_cpu_uses_native_mtp_backend(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model = Path(temp_dir) / "translate_gemma4_sub-E2B-Q4_K_XL.gguf"
+            draft = Path(temp_dir) / "mtp-gemma-4-E2B-it.gguf"
+            model.touch()
+            draft.touch()
+            config = Config()
+            config.translation = TranslationConfig(
+                model_path=str(model),
+                device="cpu",
+                mtp_enabled=True,
+                mtp_model_path=str(draft),
+                mtp_n=1,
+            )
+
+            with patch("services.llm.translator.NativeLlamaServer") as native:
+                translator = LLMTranslator(config)
+
+            native.assert_called_once()
+            self.assertEqual(native.call_args.kwargs["mtp_model_path"], str(draft))
+            self.assertEqual(native.call_args.kwargs["mtp_n"], 1)
+            self.assertIs(translator.llm, native.return_value)
 
     def test_custom_model_can_use_explicit_mtp_backend(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -201,17 +205,15 @@ class TestLLMPrompts(unittest.TestCase):
                 mtp_model_path=str(draft),
             )
 
-            with (
-                patch("services.llm.translator.NativeLlamaServer") as native,
-                patch("llama_cpp.Llama") as fallback,
-            ):
+            with patch("services.llm.translator.NativeLlamaServer") as native:
                 translator = LLMTranslator(config)
 
             native.assert_called_once()
-            fallback.assert_not_called()
+            self.assertEqual(native.call_args.kwargs["mtp_model_path"], str(draft))
+            self.assertEqual(native.call_args.kwargs["mtp_n"], 1)
             self.assertIs(translator.llm, native.return_value)
 
-    def test_disabling_mtp_never_starts_native_backend(self):
+    def test_disabling_mtp_uses_native_standard_backend(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             model = Path(temp_dir) / "translate_gemma4_sub-E4B-Q4_K_XL.gguf"
             model.touch()
@@ -221,17 +223,13 @@ class TestLLMPrompts(unittest.TestCase):
                 mtp_enabled=False,
             )
 
-            with (
-                patch(
-                    "services.llm.translator.NativeLlamaServer"
-                ) as native,
-                patch("llama_cpp.Llama") as fallback,
-            ):
+            with patch("services.llm.translator.NativeLlamaServer") as native:
                 translator = LLMTranslator(config)
 
-            native.assert_not_called()
-            fallback.assert_called_once()
-            self.assertIs(translator.llm, fallback.return_value)
+            native.assert_called_once()
+            self.assertNotIn("mtp_model_path", native.call_args.kwargs)
+            self.assertNotIn("mtp_n", native.call_args.kwargs)
+            self.assertIs(translator.llm, native.return_value)
 
     def test_translate_uses_deterministic_options_and_strips_prefix(self):
         config = Config()

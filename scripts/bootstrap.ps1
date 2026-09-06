@@ -186,46 +186,6 @@ function Invoke-Download {
     }
 }
 
-function Install-LlamaPythonCuda {
-    param([Parameter(Mandatory = $true)][string]$CudaTag)
-
-    $releaseResponse = Invoke-RestMethod `
-            -Uri "https://api.github.com/repos/abetlen/llama-cpp-python/releases?per_page=100" `
-            -Headers @{ "User-Agent" = "realtime-translator-installer" }
-    $releases = @($releaseResponse.GetEnumerator())
-    $asset = $null
-    foreach ($release in $releases) {
-        if ($release.tag_name -notlike "*-$CudaTag") {
-            continue
-        }
-        $asset = $release.assets |
-            Where-Object {
-                $_.name -match '^llama_cpp_python-.*-py3-none-win_amd64\.whl$'
-            } |
-            Select-Object -First 1
-        if ($asset) {
-            break
-        }
-    }
-    if (-not $asset) {
-        throw "No compatible Windows llama-cpp-python wheel was found for $CudaTag."
-    }
-
-    $cacheDir = Join-Path $env:TEMP "realtime-translator-llama-python"
-    $wheelPath = Join-Path $cacheDir $asset.name
-    New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
-    Write-Host "[setup] Downloading $($asset.name) with parallel connections..."
-    Invoke-Download `
-        -Uri $asset.browser_download_url `
-        -Destination $wheelPath `
-        -ExpectedBytes $asset.size
-    Invoke-Checked `
-        $VenvPython `
-        @("-m", "pip", "install", $wheelPath) `
-        "CUDA llama-cpp-python wheel installation failed."
-    Remove-Item -LiteralPath $cacheDir -Recurse -Force -ErrorAction SilentlyContinue
-}
-
 function Install-LlamaServer {
     param([bool]$UseCuda)
 
@@ -235,7 +195,7 @@ function Install-LlamaServer {
         return
     }
 
-    Write-Host "[setup] Installing native llama.cpp runtime for MTP..."
+    Write-Host "[setup] Installing native llama.cpp runtime..."
     $releaseResponse = Invoke-RestMethod `
         -Uri "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10" `
         -Headers @{ "User-Agent" = "realtime-translator-installer" }
@@ -345,25 +305,6 @@ if ($currentState.Trim() -ne $desiredState.Trim()) {
         Invoke-Checked $VenvPython @("-m", "pip", "install", "--no-deps", $DeepFilterLibWheel) "Could not install the vendored DeepFilterLib wheel."
     }
     Invoke-Checked $VenvPython @("-m", "pip", "install", "--requirement", $Requirements) "Could not install runtime libraries."
-
-    if ($cudaTag) {
-        Write-Host "[setup] NVIDIA GPU detected. Installing llama.cpp CUDA wheel ($cudaTag)..."
-        try {
-            Install-LlamaPythonCuda -CudaTag $cudaTag
-        }
-        catch {
-            Write-Warning "Parallel CUDA wheel installation failed: $($_.Exception.Message)"
-            Write-Host "[setup] Retrying with pip's standard downloader..."
-            & $VenvPython -m pip install llama-cpp-python --only-binary=llama-cpp-python --extra-index-url "https://abetlen.github.io/llama-cpp-python/whl/$cudaTag"
-        }
-    }
-    if (-not $cudaTag -or $LASTEXITCODE -ne 0) {
-        Write-Host "[setup] Installing portable llama.cpp CPU wheel..."
-        & $VenvPython -m pip install llama-cpp-python --only-binary=llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
-    }
-    if ($LASTEXITCODE -ne 0) {
-        throw "llama-cpp-python installation failed. See the messages above."
-    }
 
     Set-Content -Encoding ASCII -Path $StateFile -Value $desiredState
     Write-Host "[setup] Installation complete."

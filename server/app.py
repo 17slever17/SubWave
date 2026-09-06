@@ -26,6 +26,7 @@ from .paths import CONFIG_PATH, PROMPTS_PATH, RESET_CONFIG_PATH, STATIC_DIR, res
 from . import presets as preset_module  # noqa: E402
 from .runtime import RuntimeController  # noqa: E402
 from services.llm.prompts import PromptStore  # noqa: E402
+from services.llm.llama_server import NativeLlamaServer  # noqa: E402
 from services.stt.models import get_sherpa_model, model_options  # noqa: E402
 from configs.model_catalog import (  # noqa: E402
     capabilities,
@@ -433,12 +434,31 @@ def health_check() -> dict[str, Any]:
         add("torch", True, f"{torch.__version__}, cuda={torch.cuda.is_available()}")
     except Exception as exc:
         add("torch", False, str(exc))
-    for module_name in ["torchaudio", "sherpa_onnx", "llama_cpp"]:
+    for module_name in ["torchaudio", "sherpa_onnx"]:
         try:
             __import__(module_name)
             add(module_name, True)
         except Exception as exc:
             add(module_name, False, str(exc))
+    translation_config = config.get("translation") or {}
+    configured_server_path = str(
+        translation_config.get(
+            "llama_server_path",
+            "bin/llama.cpp/llama-server.exe",
+        )
+    )
+    try:
+        server_path = NativeLlamaServer.resolve_server_path(configured_server_path)
+        if server_path is None:
+            add(
+                "llama_server",
+                False,
+                "Native llama-server executable was not found; run start.bat to install it.",
+            )
+        else:
+            add("llama_server", True, f"Native llama-server installed: {server_path}")
+    except Exception as exc:
+        add("llama_server", False, str(exc))
     try:
         from services.filters.denoise import ensure_torchaudio_compat
 

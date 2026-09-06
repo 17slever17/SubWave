@@ -30,11 +30,11 @@ class NativeLlamaServer:
         *,
         server_path: str,
         model_path: str,
-        mtp_model_path: str,
-        mtp_n: int,
         device: str,
         n_ctx: int,
         n_batch: int,
+        mtp_model_path: str | None = None,
+        mtp_n: int = 1,
         request_timeout_s: float = 4.0,
     ) -> None:
         self.logger = logging.getLogger(__name__)
@@ -54,7 +54,7 @@ class NativeLlamaServer:
             self.build_command(
                 server_path=self.server_path,
                 model_path=Path(model_path),
-                mtp_model_path=Path(mtp_model_path),
+                mtp_model_path=Path(mtp_model_path) if mtp_model_path else None,
                 mtp_n=mtp_n,
                 device=device,
                 n_ctx=n_ctx,
@@ -97,12 +97,12 @@ class NativeLlamaServer:
         *,
         server_path: Path,
         model_path: Path,
-        mtp_model_path: Path,
-        mtp_n: int,
         device: str,
         n_ctx: int,
         n_batch: int,
         port: int,
+        mtp_model_path: Path | None = None,
+        mtp_n: int = 1,
     ) -> list[str]:
         command = [
             str(server_path),
@@ -124,19 +124,11 @@ class NativeLlamaServer:
             "--jinja",
             "--reasoning",
             "off",
-            "--spec-type",
-            "draft-mtp",
-            "--spec-draft-model",
-            str(mtp_model_path),
-            "--spec-draft-n-max",
-            str(max(1, mtp_n)),
         ]
         if device.strip().lower() in {"gpu", "cuda"}:
             command.extend(
                 [
                     "--gpu-layers",
-                    "all",
-                    "--spec-draft-ngl",
                     "all",
                     "--flash-attn",
                     "on",
@@ -149,12 +141,30 @@ class NativeLlamaServer:
                     "none",
                     "--gpu-layers",
                     "0",
-                    "--spec-draft-device",
-                    "none",
-                    "--spec-draft-ngl",
-                    "0",
                 ]
             )
+        if mtp_model_path:
+            command.extend(
+                [
+                    "--spec-type",
+                    "draft-mtp",
+                    "--spec-draft-model",
+                    str(mtp_model_path),
+                    "--spec-draft-n-max",
+                    str(max(1, mtp_n)),
+                ]
+            )
+            if device.strip().lower() in {"gpu", "cuda"}:
+                command.extend(["--spec-draft-ngl", "all"])
+            else:
+                command.extend(
+                    [
+                        "--spec-draft-device",
+                        "none",
+                        "--spec-draft-ngl",
+                        "0",
+                    ]
+                )
         return command
 
     @staticmethod

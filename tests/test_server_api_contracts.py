@@ -225,6 +225,24 @@ class ServerApiContractTests(unittest.TestCase):
         )
         self.assertTrue(extension_check["ok"])
 
+    def test_health_reports_native_llama_server_installation(self):
+        installed_path = Path("bin/llama.cpp/llama-server.exe")
+        with (
+            patch.object(app_module, "config_service", self.service),
+            patch.object(
+                app_module.NativeLlamaServer,
+                "resolve_server_path",
+                return_value=installed_path,
+            ),
+        ):
+            response = self.client.get("/api/health")
+
+        self.assertEqual(response.status_code, 200)
+        checks = response.json()["checks"]
+        server_check = next(item for item in checks if item["name"] == "llama_server")
+        self.assertTrue(server_check["ok"])
+        self.assertIn(str(installed_path), server_check["detail"])
+
 
 class ServerLifespanTests(unittest.IsolatedAsyncioTestCase):
     async def test_shutdown_stops_runtime_process(self):

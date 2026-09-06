@@ -83,6 +83,22 @@ class NativeLlamaServerCommandTests(unittest.TestCase):
         self.assertEqual(command[command.index("--spec-draft-ngl") + 1], "all")
         self.assertNotIn("--no-warmup", command)
 
+    def test_gpu_standard_command_omits_all_draft_flags(self):
+        command = NativeLlamaServer.build_command(
+            server_path=Path("llama-server.exe"),
+            model_path=Path("target.gguf"),
+            device="gpu",
+            n_ctx=1024,
+            n_batch=256,
+            port=18080,
+        )
+        self.assertNotIn("--spec-type", command)
+        self.assertNotIn("--spec-draft-model", command)
+        self.assertNotIn("--spec-draft-n-max", command)
+        self.assertNotIn("--spec-draft-ngl", command)
+        self.assertNotIn("--spec-draft-device", command)
+        self.assertEqual(command[command.index("--gpu-layers") + 1], "all")
+
     def test_cpu_disables_target_and_draft_gpu_offload(self):
         command = NativeLlamaServer.build_command(
             server_path=Path("llama-server.exe"),
@@ -98,6 +114,23 @@ class NativeLlamaServerCommandTests(unittest.TestCase):
         self.assertEqual(command[command.index("--gpu-layers") + 1], "0")
         self.assertEqual(command[command.index("--spec-draft-device") + 1], "none")
         self.assertEqual(command[command.index("--spec-draft-ngl") + 1], "0")
+
+    def test_cpu_standard_command_omits_all_draft_flags(self):
+        command = NativeLlamaServer.build_command(
+            server_path=Path("llama-server.exe"),
+            model_path=Path("target.gguf"),
+            device="cpu",
+            n_ctx=1024,
+            n_batch=256,
+            port=18080,
+        )
+        self.assertNotIn("--spec-type", command)
+        self.assertNotIn("--spec-draft-model", command)
+        self.assertNotIn("--spec-draft-n-max", command)
+        self.assertNotIn("--spec-draft-ngl", command)
+        self.assertNotIn("--spec-draft-device", command)
+        self.assertEqual(command[command.index("--device") + 1], "none")
+        self.assertEqual(command[command.index("--gpu-layers") + 1], "0")
 
 
 if __name__ == "__main__":
