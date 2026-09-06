@@ -18,7 +18,7 @@ function Find-CompatiblePython {
             $arguments = @()
             if ($candidate[1]) { $arguments += $candidate[1] }
             $arguments += @("-c", "import sys; raise SystemExit(0 if (3, 11) <= sys.version_info[:2] <= (3, 12) else 1)")
-            & $command.Source @arguments
+            & $command.Source @arguments *> $null
             if ($LASTEXITCODE -eq 0) {
                 return @($command.Source, $candidate[1])
             }
@@ -31,17 +31,30 @@ function Find-CompatiblePython {
 }
 
 function Install-Python {
-    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+    $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
+    if (-not $winget) {
         throw "Python 3.11 or 3.12 is required. Install it from https://www.python.org/downloads/ and run start.bat again."
     }
+
     Write-Host "[setup] Python was not found. Installing Python 3.12 for the current user..."
-    & winget install --id Python.Python.3.12 --exact --scope user --accept-package-agreements --accept-source-agreements
-    if ($LASTEXITCODE -ne 0) {
-        throw "Python installation failed. Install Python 3.12 manually and run start.bat again."
+    $wingetArgs = @(
+        "install",
+        "--id", "Python.Python.3.12",
+        "--exact",
+        "--scope", "user",
+        "--accept-package-agreements",
+        "--accept-source-agreements",
+        "--disable-interactivity"
+    )
+    & $winget.Source @wingetArgs 2>&1 | Out-Host
+    $wingetExitCode = $LASTEXITCODE
+    if ($wingetExitCode -ne 0) {
+        throw "Python installation failed (winget exit code $wingetExitCode). Install Python 3.12 manually and run start.bat again."
     }
+
     $installed = Join-Path $env:LocalAppData "Programs\Python\Python312\python.exe"
-    if (-not (Test-Path $installed)) {
-        throw "Python was installed but could not be located. Reopen the terminal and run start.bat again."
+    if (-not (Test-Path -LiteralPath $installed)) {
+        throw "Python was installed but could not be located at: $installed"
     }
     return @($installed, "")
 }
