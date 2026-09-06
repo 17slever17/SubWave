@@ -10,7 +10,6 @@ $DeepFilterLibWheel = Join-Path $AppDir "wheels\DeepFilterLib-0.5.6-cp312-none-w
 function Find-CompatiblePython {
     $candidates = @(
         @("py", "-3.12"),
-        @("py", "-3.11"),
         @("python", "")
     )
     foreach ($candidate in $candidates) {
@@ -18,7 +17,7 @@ function Find-CompatiblePython {
             $command = Get-Command $candidate[0] -ErrorAction Stop
             $arguments = @()
             if ($candidate[1]) { $arguments += $candidate[1] }
-            $arguments += @("-c", "import sys; raise SystemExit(0 if (3, 11) <= sys.version_info[:2] <= (3, 12) else 1)")
+            $arguments += @("-c", "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)")
             & $command.Source @arguments *> $null
             if ($LASTEXITCODE -eq 0) {
                 return @($command.Source, $candidate[1])
@@ -34,7 +33,7 @@ function Find-CompatiblePython {
 function Install-Python {
     $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
     if (-not $winget) {
-        throw "Python 3.11 or 3.12 is required. Install it from https://www.python.org/downloads/ and run start.bat again."
+        throw "Python 3.12 is required. Install it from https://www.python.org/downloads/ and run start.bat again."
     }
 
     Write-Host "[setup] Python was not found. Installing Python 3.12 for the current user..."
@@ -303,12 +302,17 @@ function Install-LlamaServer {
 }
 
 Set-Location $AppDir
-$PythonCommand = Find-CompatiblePython
-if (-not $PythonCommand) {
-    $PythonCommand = Install-Python
+if (Test-Path $VenvPython) {
+    & $VenvPython -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)" *> $null
+    if ($LASTEXITCODE -ne 0) {
+        throw "The existing .venv uses an unsupported Python version. Delete '$VenvDir' and run start.bat again to recreate it with Python 3.12."
+    }
 }
-
-if (-not (Test-Path $VenvPython)) {
+else {
+    $PythonCommand = Find-CompatiblePython
+    if (-not $PythonCommand) {
+        $PythonCommand = Install-Python
+    }
     Write-Host "[setup] Creating an isolated Python environment..."
     $venvArgs = @()
     if ($PythonCommand[1]) { $venvArgs += $PythonCommand[1] }
