@@ -79,6 +79,16 @@ if ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($tempRoot)) -ne $tempPare
 
 try {
     New-Item -ItemType Directory -Path $tempRoot | Out-Null
+
+    $fakeWindowsDir = Join-Path $tempRoot "fake-windows"
+    $fakeSystem32 = Join-Path $fakeWindowsDir "System32"
+    New-Item -ItemType Directory -Path $fakeSystem32 | Out-Null
+    Assert-Equal $false (Test-VulkanRuntimeAvailable -WindowsDirectory $fakeWindowsDir) "Vulkan loader absent"
+    [IO.File]::WriteAllText((Join-Path $fakeSystem32 "vulkan-1.dll"), "")
+    $fakeVulkanAvailable = Test-VulkanRuntimeAvailable -WindowsDirectory $fakeWindowsDir
+    Assert-Equal $true $fakeVulkanAvailable "Vulkan loader without registry or CLI"
+    Assert-Equal "vulkan" (Select-LlamaBackend -CudaRuntimeAvailable $false -VulkanRuntimeAvailable $fakeVulkanAvailable) "Loader-only Vulkan selection"
+
     $serverExe = Join-Path $tempRoot "llama-server.exe"
     [IO.File]::WriteAllBytes($serverExe, [byte[]]@())
     $markerPath = Join-Path $tempRoot "runtime-backend.txt"

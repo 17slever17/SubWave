@@ -102,55 +102,14 @@ function Get-CudaWheelTag {
 }
 
 function Test-VulkanRuntimeAvailable {
-    $windowsDir = if ($env:WINDIR) { $env:WINDIR } else { [Environment]::GetFolderPath("Windows") }
-    $loaderPath = Join-Path $windowsDir "System32\vulkan-1.dll"
-    if (-not (Test-Path -LiteralPath $loaderPath)) {
-        return $false
-    }
+    param([string]$WindowsDirectory = $env:WINDIR)
 
-    # Driver installations register ICD manifests here; vulkaninfo is an SDK tool
-    # and is not required on end-user systems.
-    foreach ($registryPath in @(
-        "HKLM:\SOFTWARE\Khronos\Vulkan\Drivers",
-        "HKCU:\SOFTWARE\Khronos\Vulkan\Drivers"
-    )) {
-        try {
-            $drivers = Get-ItemProperty -LiteralPath $registryPath -ErrorAction Stop
-            foreach ($driver in $drivers.PSObject.Properties) {
-                if (
-                    $driver.Name -match "\.json$" -and
-                    [int]$driver.Value -eq 0 -and
-                    (Test-Path -LiteralPath $driver.Name)
-                ) {
-                    return $true
-                }
-            }
-        }
-        catch {
-            continue
-        }
+    if ([string]::IsNullOrWhiteSpace($WindowsDirectory)) {
+        $WindowsDirectory = [Environment]::GetFolderPath("Windows")
     }
-
-    # Keep vulkaninfo as a last-resort probe only; it is not an install requirement.
-    $vulkanInfo = Get-Command vulkaninfo.exe -ErrorAction SilentlyContinue
-    if ($vulkanInfo) {
-        $previousErrorActionPreference = $ErrorActionPreference
-        $ErrorActionPreference = "Continue"
-        try {
-            $summary = (& $vulkanInfo.Source --summary 2>$null | Out-String)
-            $vulkanInfoExitCode = $LASTEXITCODE
-        }
-        finally {
-            $ErrorActionPreference = $previousErrorActionPreference
-        }
-        if (
-            $vulkanInfoExitCode -eq 0 -and
-            $summary -match "deviceType\s*=\s*PHYSICAL_DEVICE_TYPE_(INTEGRATED|DISCRETE)_GPU"
-        ) {
-            return $true
-        }
-    }
-    return $false
+    # Registry and SDK-tool probes can miss valid driver installs; the loader is sufficient to select Vulkan.
+    $loaderPath = Join-Path $WindowsDirectory "System32\vulkan-1.dll"
+    return Test-Path -LiteralPath $loaderPath -PathType Leaf
 }
 
 function Select-LlamaBackend {
