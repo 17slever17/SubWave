@@ -69,13 +69,13 @@ The toolbar and in-page buttons stay synchronized. Gray means the tab is not sel
 
 ## 🖥️ Requirements
 
-SubWave supports Windows 10 and Windows 11 x64. Internet access is required during the first installation and while downloading models. An NVIDIA GPU is recommended for GPU translation profiles; the CPU profile does not require a dedicated GPU.
+SubWave supports Windows 10 and Windows 11 x64. Internet access is required during the first installation and while downloading models. NVIDIA and AMD GPUs are supported for translation. Setup selects CUDA for compatible NVIDIA drivers, Vulkan when a Vulkan driver/runtime is available, or CPU otherwise.
 
-- **Max:** NVIDIA GPU with at least 8 GB of VRAM; Translate Gemma Sub E4B runs on the GPU.
-- **Medium:** NVIDIA GPU with at least 6 GB of VRAM; Translate Gemma Sub E2B runs on the GPU.
+- **Max:** GPU with at least 8 GB of VRAM; Translate Gemma Sub E4B runs on the GPU via CUDA or Vulkan.
+- **Medium:** GPU with at least 6 GB of VRAM; Translate Gemma Sub E2B runs on the GPU via CUDA or Vulkan.
 - **Potato:** a reasonably modern CPU and sufficient system RAM; Translate Gemma Sub E2B runs on the CPU and no GPU is required.
 
-Speech recognition uses the CPU by default so that GPU memory remains available for translation.
+Speech recognition uses the CPU by default so that GPU memory remains available for translation. With the Vulkan llama-server build, CPU is the only available speech-recognition backend.
 
 ## 🎛️ WebUI and First Run
 
@@ -107,7 +107,7 @@ Developers can set an absolute path to a custom `.gguf` model in Advanced settin
 
 SubWave is an asynchronous local pipeline. The browser extension sends 48 kHz mono PCM over WebSocket; audio filters prepare separate signals for endpoint detection and recognition; FireRedVAD detects speech boundaries; sherpa-onnx recognizes completed utterances; and the local LLM translates only the current subtitle while receiving a bounded previous-subtitle context. Ordered results are published through the local browser bridge and rendered inside the player.
 
-For local development, install the development dependencies, run `start-dev.bat`, and use the existing test and frontend build commands before submitting changes. Useful future improvements include optional speaker diarization, faster and more accurate speech recognition, faster translation, improved speculative decoding, AMD Radeon GPU support, and support for additional operating systems.
+For local development, install the development dependencies, run `start-dev.bat`, and use the existing test and frontend build commands before submitting changes. Useful future improvements include optional speaker diarization, faster and more accurate speech recognition, faster translation, improved speculative decoding, and support for additional operating systems.
 
 ## 🤝 Contributions
 
@@ -173,13 +173,13 @@ SubWave — локальный переводчик субтитров в реа
 
 ## 🖥️ Требования
 
-SubWave поддерживает Windows 10 и Windows 11 x64. Интернет нужен во время первой установки и скачивания моделей. Для GPU-профилей рекомендуется видеокарта NVIDIA; CPU-профиль работает без дискретной видеокарты.
+SubWave поддерживает Windows 10 и Windows 11 x64. Интернет нужен во время первой установки и скачивания моделей. Для перевода поддерживаются видеокарты NVIDIA и AMD. Установщик выбирает CUDA при наличии совместимого драйвера NVIDIA, Vulkan при наличии драйвера и среды Vulkan, иначе CPU.
 
-- **Max:** видеокарта NVIDIA минимум с 8 ГБ видеопамяти; Translate Gemma Sub E4B работает на GPU.
-- **Medium:** видеокарта NVIDIA минимум с 6 ГБ видеопамяти; Translate Gemma Sub E2B работает на GPU.
+- **Max:** видеокарта минимум с 8 ГБ видеопамяти; Translate Gemma Sub E4B работает на GPU через CUDA или Vulkan.
+- **Medium:** видеокарта минимум с 6 ГБ видеопамяти; Translate Gemma Sub E2B работает на GPU через CUDA или Vulkan.
 - **Potato:** достаточно современный процессор и достаточный объём оперативной памяти; Translate Gemma Sub E2B работает на CPU, видеокарта не требуется.
 
-Распознавание речи по умолчанию работает на CPU, чтобы видеопамять оставалась доступной модели перевода.
+Распознавание речи по умолчанию работает на CPU, чтобы видеопамять оставалась доступной модели перевода. Со сборкой llama-server для Vulkan распознавание доступно только на CPU.
 
 ## 🎛️ WebUI и первый запуск
 
@@ -211,7 +211,7 @@ Gemma 4 была специально дообучена для естестве
 
 SubWave представляет собой асинхронный локальный конвейер. Расширение передаёт mono PCM 48 кГц через WebSocket; аудиофильтры подготавливают отдельные сигналы для определения границ и распознавания; FireRedVAD находит границы речи; sherpa-onnx распознаёт завершённые реплики; локальная LLM переводит только текущий субтитр и получает ограниченный контекст предыдущих реплик. Результаты сохраняют порядок, публикуются через локальный browser bridge и отображаются внутри плеера.
 
-Для локальной разработки установите development-зависимости, запустите `start-dev.bat` и перед отправкой изменений выполните существующие тесты и сборку frontend. Полезные направления развития: необязательная диаризация говорящих, ускорение и повышение точности распознавания, ускорение перевода, улучшение speculative decoding, поддержка видеокарт AMD Radeon и других операционных систем.
+Для локальной разработки установите development-зависимости, запустите `start-dev.bat` и перед отправкой изменений выполните существующие тесты и сборку frontend. Полезные направления развития: необязательная диаризация говорящих, ускорение и повышение точности распознавания, ускорение перевода, улучшение speculative decoding и поддержка других операционных систем.
 
 ## 🤝 Участие в разработке
 
