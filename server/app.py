@@ -171,10 +171,48 @@ def _extension_health(host: str, port: int) -> tuple[bool, str]:
     return False, "Not detected; enable capture once from the browser toolbar"
 
 
+def _active_llama_server_is_vulkan(config: dict[str, Any]) -> bool:
+    translation = config.get("translation", {})
+    if not isinstance(translation, dict):
+        return False
+    configured_path = str(
+        translation.get("llama_server_path", "bin/llama.cpp/llama-server.exe")
+    )
+    server_path = NativeLlamaServer.resolve_server_path(configured_path)
+    if server_path is None:
+        return False
+
+    if (server_path.parent / "ggml-vulkan.dll").is_file():
+        return True
+
+    bundled_directory = (ROOT / "bin" / "llama.cpp").resolve()
+    if server_path.parent.resolve() != bundled_directory:
+        return False
+    marker = bundled_directory / "runtime-backend.txt"
+    try:
+        return marker.read_text(encoding="utf-8").strip().lower() == "vulkan"
+    except OSError:
+        return False
+
+
+def _validate_active_runtime_config(config: dict[str, Any]) -> None:
+    stt_config = config.get("stt", {})
+    provider = (
+        str(stt_config.get("sherpa_onnx_provider", "cpu")).lower()
+        if isinstance(stt_config, dict)
+        else "cpu"
+    )
+    if provider == "cuda" and _active_llama_server_is_vulkan(config):
+        raise ValueError(
+            "STT GPU mode is unavailable with the active Vulkan llama-server build; use CPU."
+        )
+    validate_runtime_config(config)
+
+
 @app.post("/api/control/start")
 async def start_runtime() -> dict[str, Any]:
     try:
-        validate_runtime_config(config_service.read())
+        _validate_active_runtime_config(config_service.read())
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"runtime": await runtime.start()}
@@ -197,6 +235,10 @@ async def stop_runtime() -> dict[str, Any]:
 
 @app.post("/api/control/restart")
 async def restart_runtime() -> dict[str, Any]:
+    try:
+        _validate_active_runtime_config(config_service.read())
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"runtime": await runtime.restart()}
 
 
@@ -211,7 +253,7 @@ async def save_config(request: Request) -> dict[str, Any]:
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="config must be an object")
     try:
-        validate_runtime_config(body)
+        _validate_active_runtime_config(body)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     saved = config_service.write(body)
@@ -227,7 +269,7 @@ async def patch_config(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="patch must be an object")
     candidate = config_service.preview_patch(patch)
     try:
-        validate_runtime_config(candidate)
+        _validate_active_runtime_config(candidate)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     saved = config_service.patch(patch)
@@ -283,7 +325,7 @@ async def apply_preset(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"Unknown preset: {preset_id}")
     candidate = config_service.preview_patch(preset["patch"])
     try:
-        validate_runtime_config(candidate)
+        _validate_active_runtime_config(candidate)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     logger.info("[presets.apply] id=%s", preset_id)
@@ -397,6 +439,8 @@ def get_stt_models() -> dict[str, Any]:
 @app.get("/api/capabilities")
 def get_capabilities() -> dict[str, Any]:
     payload = capabilities(resolve_project_path("models"))
+    active_config = config_service.read()
+    vulkan_backend = _active_llama_server_is_vulkan(active_config)
     try:
         import sherpa_onnx
     except Exception:
@@ -405,7 +449,8 @@ def get_capabilities() -> dict[str, Any]:
         {"value": "cpu", "label": "CPU (Recommended)"},
         *(
             [{"value": "cuda", "label": "GPU (CUDA)"}]
-            if "+cuda" in str(getattr(sherpa_onnx, "__version__", "")).lower()
+            if not vulkan_backend
+            and "+cuda" in str(getattr(sherpa_onnx, "__version__", "")).lower()
             else []
         ),
     ]

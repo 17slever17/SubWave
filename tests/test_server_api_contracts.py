@@ -243,6 +243,128 @@ class ServerApiContractTests(unittest.TestCase):
         self.assertTrue(server_check["ok"])
         self.assertIn(str(installed_path), server_check["detail"])
 
+    def test_vulkan_install_marker_hides_cuda_stt_capability(self):
+        root = Path(self.temp_dir.name) / "install"
+        bundled_dir = root / "bin" / "llama.cpp"
+        bundled_dir.mkdir(parents=True)
+        server_path = bundled_dir / "llama-server.exe"
+        server_path.touch()
+        (bundled_dir / "runtime-backend.txt").write_text("vulkan\n", encoding="utf-8")
+
+        with (
+            patch.object(app_module, "ROOT", root),
+            patch.object(app_module, "config_service", self.service),
+            patch.object(
+                app_module.NativeLlamaServer,
+                "resolve_server_path",
+                return_value=server_path,
+            ),
+            patch.object(app_module, "capabilities", return_value={}),
+            patch.dict("sys.modules", {"sherpa_onnx": mock.Mock(__version__="1.0+cuda")}),
+        ):
+            response = self.client.get("/api/capabilities")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["stt_providers"], [
+            {"value": "cpu", "label": "CPU (Recommended)"},
+        ])
+
+    def test_custom_vulkan_server_dll_hides_cuda_stt_capability(self):
+        server_dir = Path(self.temp_dir.name) / "custom-llama"
+        server_dir.mkdir()
+        server_path = server_dir / "llama-server.exe"
+        server_path.touch()
+        (server_dir / "ggml-vulkan.dll").touch()
+        configured_path = str(server_path)
+        self.service.patch({"translation": {"llama_server_path": configured_path}})
+
+        with (
+            patch.object(app_module, "config_service", self.service),
+            patch.object(
+                app_module.NativeLlamaServer,
+                "resolve_server_path",
+                return_value=server_path,
+            ) as resolve_server_path,
+            patch.object(app_module, "capabilities", return_value={}),
+            patch.dict("sys.modules", {"sherpa_onnx": mock.Mock(__version__="1.0+cuda")}),
+        ):
+            response = self.client.get("/api/capabilities")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([item["value"] for item in response.json()["stt_providers"]], ["cpu"])
+        resolve_server_path.assert_called_once_with(configured_path)
+
+    def test_non_vulkan_install_keeps_cuda_stt_capability(self):
+        root = Path(self.temp_dir.name) / "install"
+        bundled_dir = root / "bin" / "llama.cpp"
+        bundled_dir.mkdir(parents=True)
+        (bundled_dir / "runtime-backend.txt").write_text("vulkan", encoding="utf-8")
+        server_dir = Path(self.temp_dir.name) / "cuda-llama"
+        server_dir.mkdir()
+        server_path = server_dir / "llama-server.exe"
+        server_path.touch()
+        configured_path = str(server_path)
+        self.service.patch({"translation": {"llama_server_path": configured_path}})
+
+        with (
+            patch.object(app_module, "ROOT", root),
+            patch.object(app_module, "config_service", self.service),
+            patch.object(
+                app_module.NativeLlamaServer,
+                "resolve_server_path",
+                return_value=server_path,
+            ) as resolve_server_path,
+            patch.object(app_module, "capabilities", return_value={}),
+            patch.dict("sys.modules", {"sherpa_onnx": mock.Mock(__version__="1.0+cuda")}),
+        ):
+            response = self.client.get("/api/capabilities")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [item["value"] for item in response.json()["stt_providers"]],
+            ["cpu", "cuda"],
+        )
+        resolve_server_path.assert_called_once_with(configured_path)
+
+    def test_vulkan_rejects_cuda_config_and_prevents_runtime_start(self):
+        root = Path(self.temp_dir.name) / "install"
+        bundled_dir = root / "bin" / "llama.cpp"
+        bundled_dir.mkdir(parents=True)
+        server_path = bundled_dir / "llama-server.exe"
+        server_path.touch()
+        (bundled_dir / "runtime-backend.txt").write_text("vulkan", encoding="utf-8")
+        runtime = mock.Mock()
+        runtime.start = mock.AsyncMock()
+        runtime.restart = mock.AsyncMock()
+
+        with (
+            patch.object(app_module, "ROOT", root),
+            patch.object(app_module, "config_service", self.service),
+            patch.object(app_module, "runtime", runtime),
+            patch.object(
+                app_module.NativeLlamaServer,
+                "resolve_server_path",
+                return_value=server_path,
+            ),
+            patch.object(app_module, "validate_runtime_config"),
+        ):
+            patch_response = self.client.post(
+                "/api/config/patch",
+                json={"patch": {"stt": {"sherpa_onnx_provider": "cuda"}}},
+            )
+            self.assertEqual(patch_response.status_code, 409)
+            self.assertIn("Vulkan", patch_response.json()["detail"])
+            self.assertEqual(self.service.read()["stt"]["sherpa_onnx_provider"], "cpu")
+
+            self.service.patch({"stt": {"sherpa_onnx_provider": "cuda"}})
+            start_response = self.client.post("/api/control/start")
+            restart_response = self.client.post("/api/control/restart")
+
+        self.assertEqual(start_response.status_code, 409)
+        self.assertEqual(restart_response.status_code, 409)
+        runtime.start.assert_not_awaited()
+        runtime.restart.assert_not_awaited()
+
 
 class ServerLifespanTests(unittest.IsolatedAsyncioTestCase):
     async def test_shutdown_stops_runtime_process(self):

@@ -76,7 +76,7 @@ export default function SettingsPage() {
           ? { ...loadedPrompts, active: configuredPrompt }
           : loadedPrompts
         const fallbackPrompt = syncedPrompts.presets[syncedPrompts.active]
-        const initialDraft = !configuredPromptExists && fallbackPrompt
+        const promptAdjustedDraft = !configuredPromptExists && fallbackPrompt
           ? {
             ...loadedConfig,
             language: fallbackPrompt.source_language || loadedConfig.language,
@@ -87,6 +87,14 @@ export default function SettingsPage() {
             },
           }
           : loadedConfig
+        const supportedSttProviders = new Set(loadedCapabilities.stt_providers.map(provider => provider.value))
+        const initialDraft = promptAdjustedDraft.stt.sherpa_onnx_provider === 'cuda'
+          && !supportedSttProviders.has('cuda')
+          ? {
+            ...promptAdjustedDraft,
+            stt: { ...promptAdjustedDraft.stt, sherpa_onnx_provider: 'cpu' },
+          }
+          : promptAdjustedDraft
         setConfig(loadedConfig)
         setDraft(initialDraft)
         setPresets(loadedPresets)

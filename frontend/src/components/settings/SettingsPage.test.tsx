@@ -188,6 +188,42 @@ describe('SettingsPage', () => {
     expect(provider.parentElement).toHaveTextContent('directml')
   })
 
+  it('normalizes a saved CUDA STT device to CPU when CUDA is unavailable', async () => {
+    vi.mocked(client.getConfig).mockResolvedValue({
+      ...structuredClone(config),
+      stt: { ...config.stt, sherpa_onnx_provider: 'cuda' },
+    })
+
+    render(<SettingsPage />)
+
+    expect(await screen.findByRole('button', { name: 'ASR device: CPU (Recommended)' })).toBeInTheDocument()
+    await waitFor(() => expect(client.saveConfig).toHaveBeenCalledTimes(1), {
+      timeout: 1500,
+    })
+    expect(vi.mocked(client.saveConfig).mock.calls[0][0].stt.sherpa_onnx_provider).toBe('cpu')
+  })
+
+  it('keeps CUDA available when reported by STT capabilities', async () => {
+    vi.mocked(client.getConfig).mockResolvedValue({
+      ...structuredClone(config),
+      stt: { ...config.stt, sherpa_onnx_provider: 'cuda' },
+    })
+    vi.mocked(client.getCapabilities).mockResolvedValue({
+      ...structuredClone(capabilities),
+      stt_providers: [
+        ...capabilities.stt_providers,
+        { value: 'cuda', label: 'GPU (CUDA)' },
+      ],
+    })
+
+    render(<SettingsPage />)
+
+    const provider = await screen.findByRole('button', { name: 'ASR device: GPU (CUDA)' })
+    fireEvent.click(provider)
+    expect(screen.getByRole('option', { name: 'GPU (CUDA)' })).toBeInTheDocument()
+    expect(client.saveConfig).not.toHaveBeenCalled()
+  })
+
   it('persists a newly created prompt immediately without entering edit mode', async () => {
     render(<SettingsPage />)
     await screen.findByText('Prompts')
