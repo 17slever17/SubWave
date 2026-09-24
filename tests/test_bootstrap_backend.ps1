@@ -105,17 +105,12 @@ finally {
     }
 }
 
-$hostHasVulkan = if ($RequireVulkan) {
-    Test-VulkanRuntimeAvailable -SkipVulkanInfo
-}
-else {
-    Test-VulkanRuntimeAvailable
-}
+$hostHasVulkan = Test-VulkanRuntimeAvailable
 if (-not $hostHasVulkan -and $RequireVulkan) {
-    throw "The SDK-independent host Vulkan loader/ICD probe did not detect an available hardware Vulkan runtime."
+    throw "The host Vulkan loader/ICD probe did not detect an available hardware Vulkan runtime."
 }
 if ($hostHasVulkan) {
-    Write-Host "Host Vulkan runtime detected without requiring vulkaninfo."
+    Write-Host "Host Vulkan runtime detected."
 }
 else {
     Write-Host "Host Vulkan runtime not detected; CPU fallback remains valid."

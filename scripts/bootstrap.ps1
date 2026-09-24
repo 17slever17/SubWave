@@ -102,8 +102,6 @@ function Get-CudaWheelTag {
 }
 
 function Test-VulkanRuntimeAvailable {
-    param([switch]$SkipVulkanInfo)
-
     $windowsDir = if ($env:WINDIR) { $env:WINDIR } else { [Environment]::GetFolderPath("Windows") }
     $loaderPath = Join-Path $windowsDir "System32\vulkan-1.dll"
     if (-not (Test-Path -LiteralPath $loaderPath)) {
@@ -133,138 +131,7 @@ function Test-VulkanRuntimeAvailable {
         }
     }
 
-    # Probe the loader directly when an ICD is functional but its registry entry
-    # is unavailable to this process. This does not depend on SDK utilities.
-    try {
-        if (-not ("RealtimeTranslatorNativeVulkanProbe" -as [type])) {
-            Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-
-public static class RealtimeTranslatorNativeVulkanProbe
-{
-    [StructLayout(LayoutKind.Sequential)]
-    private struct VkApplicationInfo
-    {
-        public uint sType;
-        public IntPtr pNext;
-        public IntPtr pApplicationName;
-        public uint applicationVersion;
-        public IntPtr pEngineName;
-        public uint engineVersion;
-        public uint apiVersion;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct VkInstanceCreateInfo
-    {
-        public uint sType;
-        public IntPtr pNext;
-        public uint flags;
-        public IntPtr pApplicationInfo;
-        public uint enabledLayerCount;
-        public IntPtr ppEnabledLayerNames;
-        public uint enabledExtensionCount;
-        public IntPtr ppEnabledExtensionNames;
-    }
-
-    [DllImport("vulkan-1.dll", CallingConvention = CallingConvention.StdCall)]
-    private static extern int vkCreateInstance(
-        ref VkInstanceCreateInfo createInfo, IntPtr allocator, out IntPtr instance);
-
-    [DllImport("vulkan-1.dll", CallingConvention = CallingConvention.StdCall)]
-    private static extern int vkEnumeratePhysicalDevices(
-        IntPtr instance, ref uint count, IntPtr devices);
-
-    [DllImport("vulkan-1.dll", CallingConvention = CallingConvention.StdCall)]
-    private static extern void vkGetPhysicalDeviceProperties(
-        IntPtr device, IntPtr properties);
-
-    [DllImport("vulkan-1.dll", CallingConvention = CallingConvention.StdCall)]
-    private static extern void vkDestroyInstance(IntPtr instance, IntPtr allocator);
-
-    public static bool HasHardwareDevice()
-    {
-        IntPtr appName = IntPtr.Zero;
-        IntPtr engineName = IntPtr.Zero;
-        IntPtr appInfoPointer = IntPtr.Zero;
-        IntPtr createInfoPointer = IntPtr.Zero;
-        IntPtr devicesPointer = IntPtr.Zero;
-        IntPtr instance = IntPtr.Zero;
-        try
-        {
-            appName = Marshal.StringToHGlobalAnsi("RealtimeTranslatorBootstrap");
-            engineName = Marshal.StringToHGlobalAnsi("llama.cpp");
-            var appInfo = new VkApplicationInfo {
-                sType = 0,
-                pApplicationName = appName,
-                applicationVersion = 1,
-                pEngineName = engineName,
-                engineVersion = 1,
-                apiVersion = 1u << 22
-            };
-            appInfoPointer = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(VkApplicationInfo)));
-            Marshal.StructureToPtr(appInfo, appInfoPointer, false);
-            var createInfo = new VkInstanceCreateInfo {
-                sType = 1,
-                pApplicationInfo = appInfoPointer
-            };
-            createInfoPointer = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(VkInstanceCreateInfo)));
-            Marshal.StructureToPtr(createInfo, createInfoPointer, false);
-            if (vkCreateInstance(ref createInfo, IntPtr.Zero, out instance) != 0)
-                return false;
-
-            uint count = 0;
-            if (vkEnumeratePhysicalDevices(instance, ref count, IntPtr.Zero) != 0 || count == 0)
-                return false;
-            devicesPointer = Marshal.AllocHGlobal(IntPtr.Size * (int)count);
-            if (vkEnumeratePhysicalDevices(instance, ref count, devicesPointer) != 0)
-                return false;
-            var devices = new IntPtr[(int)count];
-            Marshal.Copy(devicesPointer, devices, 0, (int)count);
-            foreach (var device in devices)
-            {
-                var properties = Marshal.AllocHGlobal(1024);
-                try
-                {
-                    vkGetPhysicalDeviceProperties(device, properties);
-                    int deviceType = Marshal.ReadInt32(properties, 16);
-                    if (deviceType >= 1 && deviceType <= 3)
-                        return true;
-                }
-                finally
-                {
-                    Marshal.FreeHGlobal(properties);
-                }
-            }
-            return false;
-        }
-        finally
-        {
-            if (instance != IntPtr.Zero)
-                vkDestroyInstance(instance, IntPtr.Zero);
-            if (devicesPointer != IntPtr.Zero) Marshal.FreeHGlobal(devicesPointer);
-            if (createInfoPointer != IntPtr.Zero) Marshal.FreeHGlobal(createInfoPointer);
-            if (appInfoPointer != IntPtr.Zero) Marshal.FreeHGlobal(appInfoPointer);
-            if (engineName != IntPtr.Zero) Marshal.FreeHGlobal(engineName);
-            if (appName != IntPtr.Zero) Marshal.FreeHGlobal(appName);
-        }
-    }
-}
-"@ -ErrorAction Stop | Out-Null
-        }
-        if ([RealtimeTranslatorNativeVulkanProbe]::HasHardwareDevice()) {
-            return $true
-        }
-    }
-    catch {
-        # Fall through to the optional command-line probe if native enumeration fails.
-    }
-
     # Keep vulkaninfo as a last-resort probe only; it is not an install requirement.
-    if ($SkipVulkanInfo) {
-        return $false
-    }
     $vulkanInfo = Get-Command vulkaninfo.exe -ErrorAction SilentlyContinue
     if ($vulkanInfo) {
         $previousErrorActionPreference = $ErrorActionPreference
