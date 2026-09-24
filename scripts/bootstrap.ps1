@@ -61,33 +61,282 @@ function Install-Python {
     return @($installed, "")
 }
 
+function Convert-CudaVersionToWheelTag {
+    param([AllowEmptyString()][string]$NvidiaSmiOutput)
+
+    $versionMatch = [regex]::Match($NvidiaSmiOutput, "CUDA\s+Version\s*:\s*(\d+)\.(\d+)", "IgnoreCase")
+    if (-not $versionMatch.Success) {
+        $versionMatch = [regex]::Match($NvidiaSmiOutput, "CUDA\s+UMD\s+Version\s*:\s*(\d+)\.(\d+)", "IgnoreCase")
+    }
+    if (-not $versionMatch.Success) {
+        return $null
+    }
+
+    $major = [int]$versionMatch.Groups[1].Value
+    $minor = [int]$versionMatch.Groups[2].Value
+    if ($major -ge 13) {
+        if ($major -gt 13 -or $minor -ge 2) { return "cu132" }
+        return "cu130"
+    }
+    if ($major -eq 12) {
+        if ($minor -ge 5) { return "cu125" }
+        if ($minor -ge 4) { return "cu124" }
+        if ($minor -ge 3) { return "cu123" }
+        if ($minor -ge 2) { return "cu122" }
+        return "cu121"
+    }
+    return "cu118"
+}
+
 function Get-CudaWheelTag {
     if (-not (Get-Command nvidia-smi -ErrorAction SilentlyContinue)) {
         return $null
     }
     try {
         $output = (& nvidia-smi 2>$null | Out-String)
-        if ($output -notmatch "CUDA Version:\s*(\d+)\.(\d+)") {
-            return "cu124"
-        }
-        $major = [int]$Matches[1]
-        $minor = [int]$Matches[2]
-        if ($major -ge 13) {
-            if ($major -gt 13 -or $minor -ge 2) { return "cu132" }
-            return "cu130"
-        }
-        if ($major -eq 12) {
-            if ($minor -ge 5) { return "cu125" }
-            if ($minor -ge 4) { return "cu124" }
-            if ($minor -ge 3) { return "cu123" }
-            if ($minor -ge 2) { return "cu122" }
-            return "cu121"
-        }
-        return "cu118"
+        return Convert-CudaVersionToWheelTag -NvidiaSmiOutput $output
     }
     catch {
-        return "cu124"
+        return $null
     }
+}
+
+function Test-VulkanRuntimeAvailable {
+    param([switch]$SkipVulkanInfo)
+
+    $windowsDir = if ($env:WINDIR) { $env:WINDIR } else { [Environment]::GetFolderPath("Windows") }
+    $loaderPath = Join-Path $windowsDir "System32\vulkan-1.dll"
+    if (-not (Test-Path -LiteralPath $loaderPath)) {
+        return $false
+    }
+
+    # Driver installations register ICD manifests here; vulkaninfo is an SDK tool
+    # and is not required on end-user systems.
+    foreach ($registryPath in @(
+        "HKLM:\SOFTWARE\Khronos\Vulkan\Drivers",
+        "HKCU:\SOFTWARE\Khronos\Vulkan\Drivers"
+    )) {
+        try {
+            $drivers = Get-ItemProperty -LiteralPath $registryPath -ErrorAction Stop
+            foreach ($driver in $drivers.PSObject.Properties) {
+                if (
+                    $driver.Name -match "\.json$" -and
+                    [int]$driver.Value -eq 0 -and
+                    (Test-Path -LiteralPath $driver.Name)
+                ) {
+                    return $true
+                }
+            }
+        }
+        catch {
+            continue
+        }
+    }
+
+    # Probe the loader directly when an ICD is functional but its registry entry
+    # is unavailable to this process. This does not depend on SDK utilities.
+    try {
+        if (-not ("RealtimeTranslatorNativeVulkanProbe" -as [type])) {
+            Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class RealtimeTranslatorNativeVulkanProbe
+{
+    [StructLayout(LayoutKind.Sequential)]
+    private struct VkApplicationInfo
+    {
+        public uint sType;
+        public IntPtr pNext;
+        public IntPtr pApplicationName;
+        public uint applicationVersion;
+        public IntPtr pEngineName;
+        public uint engineVersion;
+        public uint apiVersion;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct VkInstanceCreateInfo
+    {
+        public uint sType;
+        public IntPtr pNext;
+        public uint flags;
+        public IntPtr pApplicationInfo;
+        public uint enabledLayerCount;
+        public IntPtr ppEnabledLayerNames;
+        public uint enabledExtensionCount;
+        public IntPtr ppEnabledExtensionNames;
+    }
+
+    [DllImport("vulkan-1.dll", CallingConvention = CallingConvention.StdCall)]
+    private static extern int vkCreateInstance(
+        ref VkInstanceCreateInfo createInfo, IntPtr allocator, out IntPtr instance);
+
+    [DllImport("vulkan-1.dll", CallingConvention = CallingConvention.StdCall)]
+    private static extern int vkEnumeratePhysicalDevices(
+        IntPtr instance, ref uint count, IntPtr devices);
+
+    [DllImport("vulkan-1.dll", CallingConvention = CallingConvention.StdCall)]
+    private static extern void vkGetPhysicalDeviceProperties(
+        IntPtr device, IntPtr properties);
+
+    [DllImport("vulkan-1.dll", CallingConvention = CallingConvention.StdCall)]
+    private static extern void vkDestroyInstance(IntPtr instance, IntPtr allocator);
+
+    public static bool HasHardwareDevice()
+    {
+        IntPtr appName = IntPtr.Zero;
+        IntPtr engineName = IntPtr.Zero;
+        IntPtr appInfoPointer = IntPtr.Zero;
+        IntPtr createInfoPointer = IntPtr.Zero;
+        IntPtr devicesPointer = IntPtr.Zero;
+        IntPtr instance = IntPtr.Zero;
+        try
+        {
+            appName = Marshal.StringToHGlobalAnsi("RealtimeTranslatorBootstrap");
+            engineName = Marshal.StringToHGlobalAnsi("llama.cpp");
+            var appInfo = new VkApplicationInfo {
+                sType = 0,
+                pApplicationName = appName,
+                applicationVersion = 1,
+                pEngineName = engineName,
+                engineVersion = 1,
+                apiVersion = 1u << 22
+            };
+            appInfoPointer = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(VkApplicationInfo)));
+            Marshal.StructureToPtr(appInfo, appInfoPointer, false);
+            var createInfo = new VkInstanceCreateInfo {
+                sType = 1,
+                pApplicationInfo = appInfoPointer
+            };
+            createInfoPointer = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(VkInstanceCreateInfo)));
+            Marshal.StructureToPtr(createInfo, createInfoPointer, false);
+            if (vkCreateInstance(ref createInfo, IntPtr.Zero, out instance) != 0)
+                return false;
+
+            uint count = 0;
+            if (vkEnumeratePhysicalDevices(instance, ref count, IntPtr.Zero) != 0 || count == 0)
+                return false;
+            devicesPointer = Marshal.AllocHGlobal(IntPtr.Size * (int)count);
+            if (vkEnumeratePhysicalDevices(instance, ref count, devicesPointer) != 0)
+                return false;
+            var devices = new IntPtr[(int)count];
+            Marshal.Copy(devicesPointer, devices, 0, (int)count);
+            foreach (var device in devices)
+            {
+                var properties = Marshal.AllocHGlobal(1024);
+                try
+                {
+                    vkGetPhysicalDeviceProperties(device, properties);
+                    int deviceType = Marshal.ReadInt32(properties, 16);
+                    if (deviceType >= 1 && deviceType <= 3)
+                        return true;
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(properties);
+                }
+            }
+            return false;
+        }
+        finally
+        {
+            if (instance != IntPtr.Zero)
+                vkDestroyInstance(instance, IntPtr.Zero);
+            if (devicesPointer != IntPtr.Zero) Marshal.FreeHGlobal(devicesPointer);
+            if (createInfoPointer != IntPtr.Zero) Marshal.FreeHGlobal(createInfoPointer);
+            if (appInfoPointer != IntPtr.Zero) Marshal.FreeHGlobal(appInfoPointer);
+            if (engineName != IntPtr.Zero) Marshal.FreeHGlobal(engineName);
+            if (appName != IntPtr.Zero) Marshal.FreeHGlobal(appName);
+        }
+    }
+}
+"@ -ErrorAction Stop | Out-Null
+        }
+        if ([RealtimeTranslatorNativeVulkanProbe]::HasHardwareDevice()) {
+            return $true
+        }
+    }
+    catch {
+        # Fall through to the optional command-line probe if native enumeration fails.
+    }
+
+    # Keep vulkaninfo as a last-resort probe only; it is not an install requirement.
+    if ($SkipVulkanInfo) {
+        return $false
+    }
+    $vulkanInfo = Get-Command vulkaninfo.exe -ErrorAction SilentlyContinue
+    if ($vulkanInfo) {
+        $previousErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $summary = (& $vulkanInfo.Source --summary 2>$null | Out-String)
+            $vulkanInfoExitCode = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+        if (
+            $vulkanInfoExitCode -eq 0 -and
+            $summary -match "deviceType\s*=\s*PHYSICAL_DEVICE_TYPE_(INTEGRATED|DISCRETE)_GPU"
+        ) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Select-LlamaBackend {
+    param(
+        [bool]$CudaRuntimeAvailable,
+        [bool]$VulkanRuntimeAvailable
+    )
+
+    if ($CudaRuntimeAvailable) { return "cuda" }
+    if ($VulkanRuntimeAvailable) { return "vulkan" }
+    return "cpu"
+}
+
+function Test-Cuda124RuntimeAvailable {
+    param([string]$CudaWheelTag)
+    return $CudaWheelTag -in @("cu124", "cu125", "cu130", "cu132")
+}
+
+function Get-LlamaBackendFromDirectory {
+    param([Parameter(Mandatory = $true)][string]$BinDir)
+
+    if (-not (Test-Path -LiteralPath $BinDir -PathType Container)) {
+        return $null
+    }
+
+    $dllNames = @(
+        Get-ChildItem -LiteralPath $BinDir -Recurse -File -ErrorAction SilentlyContinue |
+            ForEach-Object { $_.Name }
+    )
+    $hasCuda = [bool]($dllNames | Where-Object { $_ -match "^(ggml-cuda|cublas|cudart).*\.dll$" })
+    $hasVulkan = [bool]($dllNames | Where-Object { $_ -match "^ggml-vulkan.*\.dll$" })
+    if ($hasCuda -and $hasVulkan) { return "mixed" }
+
+    $markerPath = Join-Path $BinDir "runtime-backend.txt"
+    $marker = $null
+    if (Test-Path -LiteralPath $markerPath -PathType Leaf) {
+        $candidateMarker = (Get-Content -LiteralPath $markerPath -Raw).Trim().ToLowerInvariant()
+        if ($candidateMarker -in @("cuda", "vulkan", "cpu")) {
+            $marker = $candidateMarker
+        }
+    }
+    if ($marker) {
+        if (($hasCuda -and $marker -ne "cuda") -or ($hasVulkan -and $marker -ne "vulkan")) {
+            return "mixed"
+        }
+        return $marker
+    }
+    if ($hasCuda) { return "cuda" }
+    if ($hasVulkan) { return "vulkan" }
+    if (Test-Path -LiteralPath (Join-Path $BinDir "llama-server.exe") -PathType Leaf) {
+        return "cpu"
+    }
+    return $null
 }
 
 function Invoke-Checked {
@@ -187,20 +436,31 @@ function Invoke-Download {
 }
 
 function Install-LlamaServer {
-    param([bool]$UseCuda)
+    param([ValidateSet("cuda", "vulkan", "cpu")][string]$Backend)
 
     $binDir = Join-Path $AppDir "bin\llama.cpp"
     $serverExe = Join-Path $binDir "llama-server.exe"
-    if (Test-Path $serverExe) {
-        return
+    if (Test-Path -LiteralPath $serverExe -PathType Leaf) {
+        $installedBackend = Get-LlamaBackendFromDirectory -BinDir $binDir
+        if ($installedBackend -eq $Backend) {
+            $markerPath = Join-Path $binDir "runtime-backend.txt"
+            [IO.File]::WriteAllText($markerPath, $Backend, [Text.Encoding]::ASCII)
+            Write-Host "[setup] Existing llama.cpp runtime backend is $Backend."
+            return
+        }
+        Write-Host "[setup] Replacing llama.cpp runtime ($installedBackend -> $Backend) to avoid mixed backend DLLs."
     }
 
-    Write-Host "[setup] Installing native llama.cpp runtime..."
+    Write-Host "[setup] Installing native llama.cpp runtime ($Backend)..."
     $releaseResponse = Invoke-RestMethod `
         -Uri "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10" `
         -Headers @{ "User-Agent" = "realtime-translator-installer" }
     $releases = @($releaseResponse.GetEnumerator())
-    $suffix = if ($UseCuda) { "bin-win-cuda-12.4-x64.zip" } else { "bin-win-cpu-x64.zip" }
+    $suffix = switch ($Backend) {
+        "cuda" { "bin-win-cuda-12.4-x64.zip" }
+        "vulkan" { "bin-win-vulkan-x64.zip" }
+        "cpu" { "bin-win-cpu-x64.zip" }
+    }
     $release = $null
     $assets = @()
     foreach ($candidate in $releases) {
@@ -208,16 +468,18 @@ function Install-LlamaServer {
             Where-Object { $_.name -like "llama-*-$suffix" } |
             Select-Object -First 1
         if ($runtimeAsset) {
-            $release = $candidate
-            $assets = @($runtimeAsset)
-            if ($UseCuda) {
+            $candidateAssets = @($runtimeAsset)
+            if ($Backend -eq "cuda") {
                 $cudaRuntime = $candidate.assets |
                     Where-Object { $_.name -eq "cudart-llama-bin-win-cuda-12.4-x64.zip" } |
                     Select-Object -First 1
-                if ($cudaRuntime) {
-                    $assets += $cudaRuntime
+                if (-not $cudaRuntime) {
+                    continue
                 }
+                $candidateAssets += $cudaRuntime
             }
+            $release = $candidate
+            $assets = $candidateAssets
             break
         }
     }
@@ -227,9 +489,12 @@ function Install-LlamaServer {
     Write-Host "[setup] Using llama.cpp release $($release.tag_name)."
 
     $temporaryDir = Join-Path $env:TEMP "realtime-translator-llama-runtime"
+    $stagingDir = Join-Path (Split-Path -Parent $binDir) ("llama.cpp.staging-" + [guid]::NewGuid().ToString("N"))
+    $backupDir = Join-Path (Split-Path -Parent $binDir) ("llama.cpp.backup-" + [guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Force -Path $temporaryDir | Out-Null
-    New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+    New-Item -ItemType Directory -Force -Path $stagingDir | Out-Null
     $installSucceeded = $false
+    $previousRuntimeMoved = $false
     try {
         foreach ($asset in $assets) {
             $archivePath = Join-Path $temporaryDir $asset.name
@@ -244,11 +509,46 @@ function Install-LlamaServer {
             }
             Expand-Archive -LiteralPath $archivePath -DestinationPath $extractDir -Force
             Get-ChildItem -LiteralPath $extractDir -Recurse -File |
-                Copy-Item -Destination $binDir -Force
+                Copy-Item -Destination $stagingDir -Force
+        }
+
+        $stagedServerExe = Join-Path $stagingDir "llama-server.exe"
+        if (-not (Test-Path -LiteralPath $stagedServerExe -PathType Leaf)) {
+            throw "llama-server.exe was not found after extracting the official runtime."
+        }
+        $stagedBackend = Get-LlamaBackendFromDirectory -BinDir $stagingDir
+        if ($stagedBackend -ne $Backend) {
+            throw "Downloaded llama.cpp files identify as backend '$stagedBackend', expected '$Backend'."
+        }
+        [IO.File]::WriteAllText(
+            (Join-Path $stagingDir "runtime-backend.txt"),
+            $Backend,
+            [Text.Encoding]::ASCII
+        )
+
+        if (Test-Path -LiteralPath $binDir -PathType Container) {
+            Move-Item -LiteralPath $binDir -Destination $backupDir
+            $previousRuntimeMoved = $true
+        }
+        try {
+            Move-Item -LiteralPath $stagingDir -Destination $binDir
+        }
+        catch {
+            if ($previousRuntimeMoved -and -not (Test-Path -LiteralPath $binDir)) {
+                Move-Item -LiteralPath $backupDir -Destination $binDir
+                $previousRuntimeMoved = $false
+            }
+            throw
         }
         $installSucceeded = $true
+        if ($previousRuntimeMoved) {
+            Remove-Item -LiteralPath $backupDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
     finally {
+        if (Test-Path -LiteralPath $stagingDir) {
+            Remove-Item -LiteralPath $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
         if ($installSucceeded) {
             Remove-Item -LiteralPath $temporaryDir -Recurse -Force -ErrorAction SilentlyContinue
         }
@@ -257,10 +557,7 @@ function Install-LlamaServer {
         }
     }
 
-    if (-not (Test-Path $serverExe)) {
-        throw "llama-server.exe was not found after extracting the official runtime."
-    }
-    Write-Host "[setup] Native llama.cpp runtime is ready."
+    Write-Host "[setup] Native llama.cpp runtime ($Backend) is ready."
 }
 
 Set-Location $AppDir
@@ -285,6 +582,11 @@ else {
 $requirementsHash = (Get-FileHash -Algorithm SHA256 $Requirements).Hash
 $bootstrapHash = (Get-FileHash -Algorithm SHA256 $MyInvocation.MyCommand.Path).Hash
 $cudaTag = Get-CudaWheelTag
+$cudaRuntimeAvailable = Test-Cuda124RuntimeAvailable -CudaWheelTag $cudaTag
+$vulkanRuntimeAvailable = Test-VulkanRuntimeAvailable
+$llamaBackend = Select-LlamaBackend `
+    -CudaRuntimeAvailable $cudaRuntimeAvailable `
+    -VulkanRuntimeAvailable $vulkanRuntimeAvailable
 $runtimeTag = if ($cudaTag) { $cudaTag } else { "cpu" }
 $useVendoredDeepFilterLib = Test-VendoredDeepFilterLibPlatform -Python $VenvPython
 $deepFilterLibWheelHash = "pypi"
@@ -313,4 +615,4 @@ else {
     Write-Host "[setup] Environment is ready."
 }
 
-Install-LlamaServer -UseCuda ([bool]$cudaTag)
+Install-LlamaServer -Backend $llamaBackend

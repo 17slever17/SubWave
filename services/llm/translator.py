@@ -9,7 +9,7 @@ from services.runtime.model_downloads import (
 )
 from services.runtime.paths import resolve_runtime_path
 from services.filters.text import collapse_repeated_text, has_repeated_token_loop, text_preview
-from services.llm.llama_server import NativeLlamaServer
+from services.llm.llama_server import NativeLlamaServer, get_runtime_backend
 from services.llm.prompts import PromptStore
 
 
@@ -30,6 +30,21 @@ class LLMTranslator:
                 "bin/llama.cpp/llama-server.exe",
             )
         )
+        resolved_server_path = NativeLlamaServer.resolve_server_path(
+            self.llama_server_path
+        )
+        self.runtime_backend = get_runtime_backend(
+            resolved_server_path or self.llama_server_path
+        )
+        if self.runtime_backend == "cpu" and self.device.strip().lower() in {
+            "gpu",
+            "cuda",
+            "vulkan",
+        }:
+            self.logger.info(
+                "Installed llama.cpp runtime is CPU-only; disabling GPU offload."
+            )
+            self.device = "cpu"
         self.context_subtitles = min(
             5, max(0, int(self._get_val("context_subtitles", 3)))
         )
@@ -42,6 +57,8 @@ class LLMTranslator:
         realtime_latency_s = float(
             self._get_val("realtime_max_translation_latency_s", 3.0)
         )
+        if self.runtime_backend == "cpu":
+            realtime_latency_s = max(30.0, realtime_latency_s)
         self.request_timeout_s = (
             max(30.0, realtime_latency_s + 1.0)
             if self.device.casefold() == "cpu"
@@ -69,12 +86,16 @@ class LLMTranslator:
 
         self.logger.info("Loading translator model from %s...", self.model_path)
         configured_model_path = str(self._get_val("model_path", self.model_path))
-        use_mtp = should_use_translation_mtp(
-            configured_model_path,
-            self.mtp_model_path,
-            self.device,
-            self.mtp_enabled,
-        )
+        use_mtp = False
+        if self.runtime_backend == "vulkan":
+            self.logger.info("Automatic MTP is disabled for the Vulkan runtime.")
+        else:
+            use_mtp = should_use_translation_mtp(
+                configured_model_path,
+                self.mtp_model_path,
+                self.device,
+                self.mtp_enabled,
+            )
         draft_path = None
         if use_mtp:
             candidate = translation_mtp_path(
@@ -88,7 +109,7 @@ class LLMTranslator:
                     "MTP model is unavailable for %s; using native standard inference.",
                     configured_model_path,
                 )
-        elif self.mtp_enabled:
+        elif self.mtp_enabled and self.runtime_backend != "vulkan":
             self.logger.info(
                 "MTP is not compatible with model=%s on device=%s; using native standard inference.",
                 configured_model_path,

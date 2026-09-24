@@ -24,6 +24,50 @@ def _close_windows_handle(handle: int | None) -> None:
     close_windows_handle(handle)
 
 
+def get_runtime_backend(server_path: str | Path | None) -> str | None:
+    if not server_path:
+        return None
+    resolved = resolve_runtime_path(server_path)
+    executable = resolved or Path(server_path)
+    bin_dir = executable.parent
+    marker_path = bin_dir / "runtime-backend.txt"
+    marker = None
+    try:
+        value = marker_path.read_text(encoding="ascii").strip().lower()
+        if value in {"cuda", "vulkan", "cpu"}:
+            marker = value
+    except OSError:
+        pass
+
+    try:
+        dll_names = {path.name.lower() for path in bin_dir.iterdir() if path.is_file()}
+    except OSError:
+        dll_names = set()
+    has_cuda = any(
+        name.startswith(("ggml-cuda", "cublas", "cudart")) and name.endswith(".dll")
+        for name in dll_names
+    )
+    has_vulkan = any(
+        name.startswith("ggml-vulkan") and name.endswith(".dll")
+        for name in dll_names
+    )
+
+    if has_cuda and has_vulkan:
+        return "mixed"
+    detected = "cuda" if has_cuda else "vulkan" if has_vulkan else None
+    if marker:
+        if detected and detected != marker:
+            return "mixed"
+        if marker == "cpu" and detected:
+            return "mixed"
+        return marker
+    if detected:
+        return detected
+    if executable.is_file():
+        return "cpu"
+    return None
+
+
 class NativeLlamaServer:
     def __init__(
         self,
@@ -43,6 +87,16 @@ class NativeLlamaServer:
             raise FileNotFoundError(
                 "llama-server was not found. Run start.bat to install the native runtime."
             )
+        self.runtime_backend = get_runtime_backend(self.server_path)
+        if self.runtime_backend == "mixed":
+            raise RuntimeError(
+                "llama.cpp runtime contains conflicting backend markers/DLLs; "
+                "run start.bat to reinstall a clean runtime."
+            )
+        self.logger.info(
+            "Using native llama.cpp runtime backend=%s",
+            self.runtime_backend or "unknown",
+        )
         self.port = self._reserve_port()
         self.base_url = f"http://127.0.0.1:{self.port}"
         self.request_timeout_s = max(1.0, float(request_timeout_s))
@@ -57,6 +111,7 @@ class NativeLlamaServer:
                 mtp_model_path=Path(mtp_model_path) if mtp_model_path else None,
                 mtp_n=mtp_n,
                 device=device,
+                runtime_backend=self.runtime_backend,
                 n_ctx=n_ctx,
                 n_batch=n_batch,
                 port=self.port,
@@ -103,7 +158,13 @@ class NativeLlamaServer:
         port: int,
         mtp_model_path: Path | None = None,
         mtp_n: int = 1,
+        runtime_backend: str | None = None,
     ) -> list[str]:
+        if runtime_backend is None:
+            runtime_backend = get_runtime_backend(server_path)
+        if runtime_backend == "mixed":
+            raise ValueError("llama.cpp runtime contains conflicting backend DLLs")
+
         command = [
             str(server_path),
             "--model",
@@ -125,13 +186,17 @@ class NativeLlamaServer:
             "--reasoning",
             "off",
         ]
-        if device.strip().lower() in {"gpu", "cuda"}:
+        use_gpu = (
+            device.strip().lower() in {"gpu", "cuda", "vulkan"}
+            and runtime_backend != "cpu"
+        )
+        if use_gpu:
             command.extend(
                 [
                     "--gpu-layers",
                     "all",
                     "--flash-attn",
-                    "on",
+                    "auto" if runtime_backend == "vulkan" else "on",
                 ]
             )
         else:
@@ -154,7 +219,7 @@ class NativeLlamaServer:
                     str(max(1, mtp_n)),
                 ]
             )
-            if device.strip().lower() in {"gpu", "cuda"}:
+            if use_gpu:
                 command.extend(["--spec-draft-ngl", "all"])
             else:
                 command.extend(
