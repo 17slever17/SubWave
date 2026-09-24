@@ -59,6 +59,20 @@ class NativeLlamaServerCommandTests(unittest.TestCase):
             timeout=4.0,
         )
 
+    def test_chat_completion_supports_per_request_timeout_override(self):
+        server = NativeLlamaServer.__new__(NativeLlamaServer)
+        server.request_timeout_s = 4.0
+        server._request = mock.Mock(return_value={"choices": []})
+
+        server.create_chat_completion(messages=[], timeout=60.0)
+
+        server._request.assert_called_once_with(
+            "POST",
+            "/v1/chat/completions",
+            {"messages": [], "model": "translation"},
+            timeout=60.0,
+        )
+
     @unittest.skipUnless(os.name == "nt", "Windows Job Objects are Windows-only")
     def test_kill_on_close_job_terminates_child_process(self):
         process = subprocess.Popen(
@@ -206,6 +220,9 @@ class TranslatorBackendTests(unittest.TestCase):
         return {
             "model_path": str(model_path),
             "device": "gpu",
+            "language": "ja",
+            "target_language": "English",
+            "prompt_preset": "ja_to_en",
             "mtp_enabled": True,
             "mtp_model_path": "auto",
             "llama_server_path": str(configured_server_path or server_path),
@@ -235,8 +252,30 @@ class TranslatorBackendTests(unittest.TestCase):
                     "services.llm.translator.translation_mtp_path",
                     return_value=draft_path,
                 ),
+                self.assertLogs("services.llm.translator", level="INFO") as logs,
             ):
                 server_class.resolve_server_path.return_value = server_path
+                warmup_start_visible_at_request = []
+
+                def complete_warmup(**_kwargs):
+                    warmup_start_visible_at_request.append(
+                        any(
+                            "Starting Vulkan translator warmup (timeout=180s" in line
+                            for line in logs.output
+                        )
+                    )
+                    return {
+                        "choices": [
+                            {
+                                "message": {"content": "This is a warmup."},
+                                "finish_reason": "stop",
+                            }
+                        ]
+                    }
+
+                server_class.return_value.create_chat_completion.side_effect = (
+                    complete_warmup
+                )
                 translator = LLMTranslator(
                     self._create_config(
                         server_path,
@@ -252,7 +291,64 @@ class TranslatorBackendTests(unittest.TestCase):
             kwargs = server_class.call_args.kwargs
             self.assertNotIn("mtp_model_path", kwargs)
             self.assertEqual(kwargs["device"], "gpu")
+            self.assertEqual(kwargs["request_timeout_s"], 4.0)
             self.assertEqual(translator.runtime_backend, "vulkan")
+            warmup_call = translator.llm.create_chat_completion.call_args
+            self.assertEqual(warmup_call.kwargs["timeout"], 180.0)
+            self.assertEqual(warmup_call.kwargs["max_tokens"], 8)
+            self.assertEqual(warmup_start_visible_at_request, [True])
+            self.assertEqual(
+                warmup_call.kwargs["messages"],
+                translator._build_messages("これは翻訳ランタイムの初期化確認です。"),
+            )
+            self.assertTrue(
+                any(
+                    "Starting Vulkan translator warmup (timeout=180s" in line
+                    for line in logs.output
+                )
+            )
+
+            translator.llm.create_chat_completion.return_value = {
+                "choices": [
+                    {
+                        "message": {"content": "Hello, the weather is nice today."},
+                        "finish_reason": "stop",
+                    }
+                ]
+            }
+            translator.translate("こんにちは。")
+            self.assertEqual(translator.llm.create_chat_completion.call_count, 2)
+
+    def test_vulkan_warmup_failure_closes_and_disables_translator(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            bin_dir = Path(temporary_dir)
+            server_path = bin_dir / "llama-server.exe"
+            server_path.touch()
+            (bin_dir / "runtime-backend.txt").write_text("vulkan", encoding="ascii")
+            model_path = bin_dir / "model.gguf"
+            model_path.touch()
+
+            with (
+                mock.patch("services.llm.translator.NativeLlamaServer") as server_class,
+                mock.patch(
+                    "services.llm.translator.should_use_translation_mtp",
+                    return_value=False,
+                ),
+                self.assertLogs("services.llm.translator", level="ERROR") as logs,
+            ):
+                server_class.resolve_server_path.return_value = server_path
+                server_instance = server_class.return_value
+                server_instance.create_chat_completion.side_effect = TimeoutError(
+                    "warmup exceeded 180s"
+                )
+
+                translator = LLMTranslator(self._create_config(server_path, model_path))
+
+            self.assertIsNone(translator.llm)
+            server_instance.close.assert_called_once_with()
+            self.assertTrue(
+                any("Vulkan translator warmup failed" in line for line in logs.output)
+            )
 
     def test_cpu_runtime_fallback_uses_cpu_device_and_timeout(self):
         with tempfile.TemporaryDirectory() as temporary_dir:
@@ -273,13 +369,38 @@ class TranslatorBackendTests(unittest.TestCase):
                 ) as should_use_mtp,
             ):
                 server_class.resolve_server_path.return_value = server_path
-                LLMTranslator(self._create_config(server_path, model_path))
+                translator = LLMTranslator(self._create_config(server_path, model_path))
 
             should_use_mtp.assert_called_once()
             self.assertEqual(should_use_mtp.call_args.args[2], "cpu")
             kwargs = server_class.call_args.kwargs
             self.assertEqual(kwargs["device"], "cpu")
             self.assertEqual(kwargs["request_timeout_s"], 31.0)
+            server_class.return_value.create_chat_completion.assert_not_called()
+
+    def test_cuda_runtime_skips_vulkan_warmup(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            bin_dir = Path(temporary_dir)
+            server_path = bin_dir / "llama-server.exe"
+            server_path.touch()
+            (bin_dir / "runtime-backend.txt").write_text("cuda", encoding="ascii")
+            (bin_dir / "ggml-cuda.dll").touch()
+            model_path = bin_dir / "model.gguf"
+            model_path.touch()
+
+            with (
+                mock.patch("services.llm.translator.NativeLlamaServer") as server_class,
+                mock.patch(
+                    "services.llm.translator.should_use_translation_mtp",
+                    return_value=False,
+                ),
+            ):
+                server_class.resolve_server_path.return_value = server_path
+                translator = LLMTranslator(self._create_config(server_path, model_path))
+
+            self.assertEqual(translator.runtime_backend, "cuda")
+            self.assertEqual(server_class.call_args.kwargs["device"], "gpu")
+            server_class.return_value.create_chat_completion.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -14,6 +14,9 @@ from services.llm.prompts import PromptStore
 
 
 class LLMTranslator:
+    _VULKAN_WARMUP_TIMEOUT_S = 180.0
+    _VULKAN_WARMUP_MAX_TOKENS = 8
+
     def __init__(self, config):
         self.root_config = config
         self.config = getattr(config, "translation", config)
@@ -133,6 +136,24 @@ class LLMTranslator:
             )
         try:
             self.llm = NativeLlamaServer(**server_kwargs)
+            if self.runtime_backend == "vulkan":
+                try:
+                    self._warmup_vulkan_runtime()
+                except Exception as exc:
+                    self.logger.error(
+                        "Vulkan translator warmup failed; disabling the translator "
+                        "to avoid a cold first subtitle: %s",
+                        exc,
+                    )
+                    try:
+                        self.llm.close()
+                    except Exception as close_exc:
+                        self.logger.warning(
+                            "Could not stop llama-server after Vulkan warmup failure: %s",
+                            close_exc,
+                        )
+                    self.llm = None
+                    return
             if draft_path is not None:
                 self.logger.info(
                     "Translator model loaded with native MTP. "
@@ -154,6 +175,41 @@ class LLMTranslator:
         except Exception as exc:
             self.logger.error("Failed to load native llama-server translator model: %s", exc)
             self.llm = None
+
+    def _warmup_vulkan_runtime(self) -> None:
+        synthetic_source = (
+            "これは翻訳ランタイムの初期化確認です。"
+            if self.source_language.strip().lower().startswith("ja")
+            else "This is a synthetic translation runtime warmup check."
+        )
+        started_at = time.monotonic()
+        self.logger.info(
+            "Starting Vulkan translator warmup (timeout=%.0fs, max_tokens=%s).",
+            self._VULKAN_WARMUP_TIMEOUT_S,
+            min(self._VULKAN_WARMUP_MAX_TOKENS, max(1, self.max_tokens)),
+        )
+        response = self.llm.create_chat_completion(
+            messages=self._build_messages(synthetic_source),
+            max_tokens=min(self._VULKAN_WARMUP_MAX_TOKENS, max(1, self.max_tokens)),
+            stop=[
+                "[PREVIOUS_SOURCE]",
+                "[PREVIOUS_TRANSLATION]",
+                "[CURRENT_SOURCE]",
+                "<thought>",
+                "</think>",
+            ],
+            temperature=0.0,
+            min_p=0.1,
+            top_k=3,
+            repeat_penalty=self.repeat_penalty,
+            timeout=self._VULKAN_WARMUP_TIMEOUT_S,
+        )
+        if not response.get("choices"):
+            raise RuntimeError("llama-server returned no warmup completion")
+        self.logger.info(
+            "Vulkan translator warmup completed in %.2fs.",
+            time.monotonic() - started_at,
+        )
 
     def close(self) -> None:
         close = getattr(self.llm, "close", None)

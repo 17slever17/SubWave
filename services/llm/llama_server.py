@@ -275,13 +275,22 @@ class NativeLlamaServer:
                 time.sleep(0.2)
         raise TimeoutError(f"llama-server did not become ready; see {self.log_path}")
 
-    def create_chat_completion(self, **payload: Any) -> dict[str, Any]:
+    def create_chat_completion(
+        self,
+        *,
+        timeout: float | None = None,
+        **payload: Any,
+    ) -> dict[str, Any]:
         payload.setdefault("model", "translation")
         return self._request(
             "POST",
             "/v1/chat/completions",
             payload,
-            timeout=self.request_timeout_s,
+            timeout=(
+                self.request_timeout_s
+                if timeout is None
+                else max(1.0, float(timeout))
+            ),
         )
 
     def close(self) -> None:
