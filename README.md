@@ -71,9 +71,9 @@ The toolbar and in-page buttons stay synchronized. Gray means the tab is not sel
 
 SubWave supports Windows 10 and Windows 11 x64. Internet access is required during the first installation and while downloading models. NVIDIA and AMD GPUs are supported for translation. Setup selects CUDA for compatible NVIDIA drivers, Vulkan when a Vulkan driver/runtime is available, or CPU otherwise.
 
-- **Max:** GPU with at least 8 GB of VRAM; Translate Gemma Sub E4B runs on the GPU via CUDA or Vulkan.
-- **Medium:** GPU with at least 6 GB of VRAM; Translate Gemma Sub E2B runs on the GPU via CUDA or Vulkan.
-- **Potato:** a reasonably modern CPU and sufficient system RAM; Translate Gemma Sub E2B runs on the CPU and no GPU is required.
+- **Max:** a GPU with 8 GB or more of VRAM is recommended; Translate Gemma Sub E4B runs on the GPU via CUDA or Vulkan.
+- **Medium:** a GPU with 6 GB or more of VRAM is recommended; Translate Gemma Sub E2B runs on the GPU via CUDA or Vulkan.
+- **Potato:** a reasonably modern CPU and sufficient system RAM are recommended; Translate Gemma Sub E2B runs on the CPU and no dedicated GPU is required.
 
 Speech recognition uses the CPU by default so that GPU memory remains available for translation. With the Vulkan llama-server build, CPU is the only available speech-recognition backend.
 
@@ -175,9 +175,9 @@ SubWave — локальный переводчик субтитров в реа
 
 SubWave поддерживает Windows 10 и Windows 11 x64. Интернет нужен во время первой установки и скачивания моделей. Для перевода поддерживаются видеокарты NVIDIA и AMD. Установщик выбирает CUDA при наличии совместимого драйвера NVIDIA, Vulkan при наличии драйвера и среды Vulkan, иначе CPU.
 
-- **Max:** видеокарта минимум с 8 ГБ видеопамяти; Translate Gemma Sub E4B работает на GPU через CUDA или Vulkan.
-- **Medium:** видеокарта минимум с 6 ГБ видеопамяти; Translate Gemma Sub E2B работает на GPU через CUDA или Vulkan.
-- **Potato:** достаточно современный процессор и достаточный объём оперативной памяти; Translate Gemma Sub E2B работает на CPU, видеокарта не требуется.
+- **Max:** рекомендуется видеокарта с 8 ГБ видеопамяти или более; Translate Gemma Sub E4B работает на GPU через CUDA или Vulkan.
+- **Medium:** рекомендуется видеокарта с 6 ГБ видеопамяти или более; Translate Gemma Sub E2B работает на GPU через CUDA или Vulkan.
+- **Potato:** рекомендуются достаточно современный процессор и достаточный объём оперативной памяти; Translate Gemma Sub E2B работает на CPU, дискретная видеокарта не требуется.
 
 Распознавание речи по умолчанию работает на CPU, чтобы видеопамять оставалась доступной модели перевода. Со сборкой llama-server для Vulkan распознавание доступно только на CPU.
 
